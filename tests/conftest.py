@@ -17,6 +17,63 @@ import pytest
 # ============================================================
 
 
+def _match_where(metadata: dict, where: dict) -> bool:
+    """Minimal evaluator for a Chroma-style `where` dict used by the retriever."""
+    if not where:
+        return True
+    for key, clause in where.items():
+        if key == "$and":
+            if not all(_match_where(metadata, sub) for sub in clause):
+                return False
+            continue
+        if key == "$or":
+            if not any(_match_where(metadata, sub) for sub in clause):
+                return False
+            continue
+        value = metadata.get(key)
+        if isinstance(clause, dict):
+            for op, operand in clause.items():
+                if op == "$in":
+                    if value not in set(operand):
+                        return False
+                elif op == "$eq":
+                    if value != operand:
+                        return False
+                elif op == "$ne":
+                    if value == operand:
+                        return False
+                elif op == "$gte":
+                    try:
+                        if not (float(value or 0) >= float(operand)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif op == "$gt":
+                    try:
+                        if not (float(value or 0) > float(operand)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif op == "$lte":
+                    try:
+                        if not (float(value or 0) <= float(operand)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif op == "$lt":
+                    try:
+                        if not (float(value or 0) < float(operand)):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                else:
+                    return False
+        else:
+            if value != clause:
+                return False
+    return True
+
+
 class FakeEmbedder:
     dimension = 4
 
@@ -37,14 +94,12 @@ class FakeVectorStore:
             self._rows[i] = {"embedding": e, "metadata": m, "document": d}
 
     def search(self, query_embedding, k, where=None):
-        # naive: match everything, rank by first-dim closeness
+        # match + rank by first-dim closeness; supports a tiny subset of the
+        # Chroma-style operator dialect that our retriever actually emits:
+        # equality, {"$in": [...]}, {"$gte": n}, and a top-level {"$and": [...]}.
         items = list(self._rows.items())
         if where:
-            items = [
-                (i, r)
-                for i, r in items
-                if all(r["metadata"].get(k) == v for k, v in where.items())
-            ]
+            items = [(i, r) for i, r in items if _match_where(r["metadata"], where)]
 
         def score(r):
             return 1.0 - abs(r["embedding"][0] - query_embedding[0]) * 0.1

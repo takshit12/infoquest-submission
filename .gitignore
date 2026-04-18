@@ -1,0 +1,53 @@
+# ---- secrets & credentials (NEVER commit) ----
+.env
+.env.local
+.env.*.local
+DB Connection.docx
+openrouter.rtf
+takehome_assessment.docx
+takehome_extracted/
+
+
+# ---- runtime artifacts ----
+chroma_data/
+sessions.db
+sessions.db-journal
+*.sqlite
+*.sqlite3
+bm25_index.pkl
+
+# ---- python ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# ---- editors & OS ----
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# ---- claude code local state ----
+.claude/
+
+# ---- ML model caches (large) ----
+.cache/
+hf_cache/
+sentence_transformers_cache/
+
+# ---- logs ----
+logs/
+*.log

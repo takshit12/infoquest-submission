@@ -1,0 +1,4 @@
+{
+  "comment": "Hand-labeled eval set — populated by the feat/eval-docs worktree. Each entry contains: query, expected_geographies (hard constraints that must hold), expected_top_candidate_ids (optional exact IDs), expected_industries, expected_seniority_band. P@5/nDCG@10/MRR are computed against these.",
+  "queries": []
+}

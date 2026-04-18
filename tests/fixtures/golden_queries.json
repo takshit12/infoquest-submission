@@ -1,4 +1,286 @@
 {
-  "comment": "Hand-labeled eval set — populated by the feat/eval-docs worktree. Each entry contains: query, expected_geographies (hard constraints that must hold), expected_top_candidate_ids (optional exact IDs), expected_industries, expected_seniority_band. P@5/nDCG@10/MRR are computed against these.",
-  "queries": []
+  "comment": "Hand-labeled eval set. Relevance is PREDICATE-based because the source data is synthetic and exact candidate_ids are unknown. Each query defines a `relevance_predicate` with `must` (hard-filter compliance) and `should` (soft-signal match). Grading: 2 if all must + all should; 1 if all must only; 0 if any must is violated. Country codes are ISO-3166 alpha-2. Industry values are the canonical names present in companies.industry (see scripts/inspect_data.py). See DESIGN.md sec. 10 for the evaluation methodology.",
+  "schema_version": "1.0",
+  "queries": [
+    {
+      "id": "q01",
+      "query": "Find me regulatory affairs experts with experience in the pharmaceutical industry in the Middle East.",
+      "expected_constraints": {
+        "geographies": ["SA", "AE", "QA", "EG", "OM", "PS", "JO", "LB", "KW", "BH", "SY", "IQ", "YE", "IL", "TR"],
+        "industries": ["Pharmaceuticals"],
+        "function": "regulatory affairs",
+        "seniority_band": null,
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "country_in": ["SA", "AE", "QA", "EG", "OM", "PS", "JO", "LB", "KW", "BH", "SY", "IQ", "YE", "IL", "TR"]
+        },
+        "should": {
+          "title_contains_any": ["regulatory", "compliance", "affairs", "quality"],
+          "industry_in": ["Pharmaceuticals", "Hospitals and Health Care"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Anchor query (assessment example). Tests region-to-country expansion, industry alias (pharma -> Pharmaceuticals), and function extraction. Primary hard-filter test."
+    },
+    {
+      "id": "q02",
+      "query": "Former Chief Product Officer at a Saudi petrochemical company.",
+      "expected_constraints": {
+        "geographies": ["SA"],
+        "industries": ["Oil & Gas", "Manufacturing"],
+        "function": "product management",
+        "seniority_band": "cxo",
+        "require_current": false,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "country_in": ["SA"],
+          "seniority_in": ["cxo", "vp", "head"]
+        },
+        "should": {
+          "title_contains_any": ["chief product", "cpo", "product", "vp product", "head of product"],
+          "industry_in": ["Oil & Gas", "Manufacturing", "Energy"],
+          "is_current_equals": false
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Tests the 'former' modifier (is_current=false) combined with hard geo + seniority filter + niche industry alias (petrochemical -> Oil & Gas). The source DB may not tag every petrochemical firm consistently, so industry is a SHOULD not a MUST."
+    },
+    {
+      "id": "q03",
+      "query": "Junior data engineers anywhere.",
+      "expected_constraints": {
+        "geographies": [],
+        "industries": [],
+        "function": "data engineering",
+        "seniority_band": "junior",
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "seniority_in": ["junior", "mid"]
+        },
+        "should": {
+          "title_contains_any": ["data engineer", "junior data", "data", "analytics engineer", "etl"],
+          "skill_category_in": ["Data Engineering", "Software Development", "Analytics"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Tests seniority-band extraction on the LOW end (junior/mid). No geo filter — this is the counterpart to q04. 'Mid' is allowed in must because junior-tier titles are rare in the dataset; pure-junior would under-recall."
+    },
+    {
+      "id": "q04",
+      "query": "Senior healthcare strategist in Germany.",
+      "expected_constraints": {
+        "geographies": ["DE"],
+        "industries": ["Hospitals and Health Care", "Pharmaceuticals"],
+        "function": "strategy",
+        "seniority_band": "senior",
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "country_in": ["DE"]
+        },
+        "should": {
+          "title_contains_any": ["strategy", "strategist", "strategic", "senior", "principal", "director"],
+          "industry_in": ["Hospitals and Health Care", "Pharmaceuticals"],
+          "seniority_in": ["senior", "director", "vp", "head", "cxo", "staff_principal"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "CRITICAL failure-mode demo (DESIGN.md sec. 10.3). The corpus is 64% US; a pure-cosine ranker pushes US 'Senior Healthcare Directors' above German specialists. Only passes if geography is HARD-FILTERED, not a soft signal."
+    },
+    {
+      "id": "q05",
+      "query": "VP-level operations leaders in financial services across EMEA.",
+      "expected_constraints": {
+        "geographies": ["DE", "GB", "FR", "IT", "ES", "NL", "CH", "BE", "SE", "NO", "DK", "FI", "PL", "IE", "AT", "PT", "GR", "CZ", "HU", "RO"],
+        "industries": ["Financial Services", "Banking", "Insurance"],
+        "function": "operations",
+        "seniority_band": "vp",
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "country_in": ["DE", "GB", "FR", "IT", "ES", "NL", "CH", "BE", "SE", "NO", "DK", "FI", "PL", "IE", "AT", "PT", "GR", "CZ", "HU", "RO"],
+          "seniority_in": ["vp", "head", "director", "cxo"]
+        },
+        "should": {
+          "title_contains_any": ["operations", "coo", "ops", "vp", "head of operations", "vice president"],
+          "industry_in": ["Financial Services", "Banking", "Insurance", "Venture Capital and Private Equity Principals"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Multi-country hard filter (EMEA region expansion) + seniority band (VP) + industry family. Tests intersection of three hard signals."
+    },
+    {
+      "id": "q06",
+      "query": "Former Head of Product at a US venture-backed consumer startup.",
+      "expected_constraints": {
+        "geographies": ["US"],
+        "industries": ["Technology, Information and Internet", "Software Development", "Retail", "Venture Capital and Private Equity Principals"],
+        "function": "product management",
+        "seniority_band": "head",
+        "require_current": false,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "country_in": ["US"],
+          "seniority_in": ["head", "vp", "cxo"]
+        },
+        "should": {
+          "title_contains_any": ["head of product", "vp product", "chief product", "product"],
+          "industry_in": ["Technology, Information and Internet", "Software Development", "Retail", "Advertising Services", "Venture Capital and Private Equity Principals"],
+          "is_current_equals": false
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "'Venture-backed' is weak signal from synthetic data (no direct flag). We proxy via 'consumer startup' -> Tech / SaaS / Retail industries. Tests 'former' modifier and geo=US."
+    },
+    {
+      "id": "q07",
+      "query": "Director of Data with 10+ years of experience in healthcare.",
+      "expected_constraints": {
+        "geographies": [],
+        "industries": ["Hospitals and Health Care", "Pharmaceuticals"],
+        "function": "data",
+        "seniority_band": "director",
+        "require_current": null,
+        "min_yoe": 10
+      },
+      "relevance_predicate": {
+        "must": {
+          "min_yoe": 10,
+          "seniority_in": ["director", "vp", "head", "cxo", "staff_principal"]
+        },
+        "should": {
+          "title_contains_any": ["director", "data", "analytics", "head of data", "vp data"],
+          "industry_in": ["Hospitals and Health Care", "Pharmaceuticals"],
+          "skill_category_in": ["Data Engineering", "Analytics", "Data Science"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Tests min_yoe hard filter (10) parsed from '10+ years'. Seniority + industry soft."
+    },
+    {
+      "id": "q08",
+      "query": "Multilingual expert who speaks Arabic and French, working in consulting.",
+      "expected_constraints": {
+        "geographies": [],
+        "industries": ["Business Consulting and Services", "IT Services and IT Consulting"],
+        "function": "consulting",
+        "seniority_band": null,
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "languages_contains_all": ["Arabic", "French"]
+        },
+        "should": {
+          "title_contains_any": ["consultant", "consulting", "advisor", "partner", "principal"],
+          "industry_in": ["Business Consulting and Services", "IT Services and IT Consulting"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Tests the language-normalization edge case (DB has 'English'/'EN'/'Inglés' garbage). Consulting industry is an alias-mapped soft signal. Language match should be case-insensitive and tolerant to unnormalized entries."
+    },
+    {
+      "id": "q09",
+      "query": "Principal engineer with a cloud infrastructure background.",
+      "expected_constraints": {
+        "geographies": [],
+        "industries": ["Software Development", "Technology, Information and Internet", "IT Services and IT Consulting"],
+        "function": "engineering",
+        "seniority_band": "senior",
+        "require_current": null,
+        "min_yoe": null
+      },
+      "relevance_predicate": {
+        "must": {
+          "seniority_in": ["staff_principal", "senior", "director", "vp", "head"]
+        },
+        "should": {
+          "title_contains_any": ["principal", "staff", "engineer", "architect", "lead", "infrastructure", "platform", "cloud"],
+          "industry_in": ["Software Development", "Technology, Information and Internet", "IT Services and IT Consulting"],
+          "skill_category_in": ["Cloud", "DevOps", "Infrastructure", "Software Development", "Engineering"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "'Principal engineer' is the staff_principal tier. Tests a domain-specific SKILL axis (cloud / infra) — primarily a dense/BM25 signal since 'cloud infrastructure' is a phrase rather than a canonical taxonomy value."
+    },
+    {
+      "id": "q10",
+      "query": "Chief-level expert in banking with at least 15 years of experience.",
+      "expected_constraints": {
+        "geographies": [],
+        "industries": ["Banking", "Financial Services"],
+        "function": null,
+        "seniority_band": "cxo",
+        "require_current": null,
+        "min_yoe": 15
+      },
+      "relevance_predicate": {
+        "must": {
+          "min_yoe": 15,
+          "seniority_in": ["cxo"]
+        },
+        "should": {
+          "title_contains_any": ["chief", "ceo", "cfo", "coo", "cto", "cro", "cio"],
+          "industry_in": ["Banking", "Financial Services", "Insurance"]
+        }
+      },
+      "grading": {
+        "grade_2": "all must + all should (true positive)",
+        "grade_1": "all must only (partial match)",
+        "grade_0": "any must violation"
+      },
+      "notes": "Tests the tight 'C-level AND >=15 YoE' double-hard-filter. Both are prefilters — a candidate missing either should be excluded from the shortlist, not merely demoted."
+    }
+  ]
 }

@@ -123,12 +123,18 @@ curl -X POST localhost:8000/ingest \
 ```json
 {
   "candidates": 10120,
-  "roles": 32458,
-  "dense_docs": 32458,
-  "sparse_docs": 32458,
-  "elapsed_seconds": 412.7
+  "roles": 24635,
+  "dense_docs": 24635,
+  "sparse_docs": 24635,
+  "elapsed_seconds": 600.0
 }
 ```
+
+> **Note on timing.** A measured 200-role smoke ingest takes ~5s end-to-end on an
+> Apple-silicon laptop; the full corpus scales roughly linearly to ~8–12 min
+> depending on (a) CPU vs MPS, (b) first-run sentence-transformers model download
+> (~130 MB), and (c) round-trip latency to the remote Postgres. Pass `{"limit": 200}`
+> for a fast first-run sanity check before the full ingest.
 
 ### 3. Chat — simple NL query (the assessment example)
 

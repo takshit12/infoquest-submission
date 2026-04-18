@@ -218,17 +218,27 @@ All weights are **config constants in `app/core/config.py`** (`WEIGHT_*` env
 vars override at runtime), not LLM-emitted. The LLM says *which* signals
 apply; magnitudes are tuned once against the golden queries.
 
-| Signal | Weight | Formula | When it applies |
+| Signal | Weight | Formula (as implemented in `app/services/signals.py`) | Behaviour when intent unspecified |
 |---|---|---|---|
-| `industry_match`        | 0.25 | 1.0 if `role.industry` in `intent.industries`, 0.5 for soft sibling match, 0 otherwise | Always |
-| `function_match`        | 0.20 | cosine of BGE(role_title) vs BGE(intent.function) | When `intent.function` set |
-| `seniority_match`       | 0.20 | `1 / (1 + band_distance)` where band_distance uses `_BAND_ORDER` | When `seniority_band` set |
-| `skill_category_match`  | 0.10 | `|intent.categories ∩ role.categories| / |intent.categories|` | When `skill_categories` set |
-| `recency_decay`         | 0.10 | exp(-years_since_end / 5) capped at 1 for current roles | Always (cheap) |
-| `dense_cosine`          | 0.10 | cosine(BGE(query), BGE(role)) | Always |
-| `bm25_score`            | 0.05 | min-max normalized BM25 across the retrieved set | Always |
+| `industry_match`        | 0.25 | **1.0** if canonical `role.industry` ∈ `intent.industries` (alias-resolved); **0.0** otherwise | **0.5** (neutral) when `intent.industries` empty |
+| `function_match`        | 0.20 | **1.0** if `intent.function` appears as a substring of `job_title + description + candidate_headline`; **0.5** if any ≥4-char token of a multi-word function matches; **0.0** otherwise | **0.5** when `intent.function` is `None` |
+| `seniority_match`       | 0.20 | Bucket by `band_distance(role.seniority_tier, intent.seniority_band)`: {0→1.0, 1→0.7, 2→0.4, ≥3→0.1}. For `senior/director/vp/head/cxo` bands, multiplied by `max(0.6, min(1.0, candidate_yoe/15))` | **0.5** when `intent.seniority_band` is `None` |
+| `skill_category_match`  | 0.10 | **Jaccard**: `|intent.categories ∩ role.categories| / |intent.categories ∪ role.categories|` | **0.5** when `intent.skill_categories` empty |
+| `recency_decay`         | 0.10 | **1.0** if `is_current` or `end_date` is None; else `exp(-years_since_end / 10)` | always applies |
+| `dense_cosine`          | 0.10 | `1 - cosine_distance(BGE(query), BGE(role_doc))`, clamped to [0, 1] | always applies |
+| `bm25_score`            | 0.05 | raw BM25, batch-normalised so `max == 1.0` | always applies |
 
 Sum of weights = 1.0 → `relevance_score` is in [0, 1].
+
+**Design choices worth defending**:
+
+- **Bucket-based seniority (not `1/(1+dist)`).** Human tier-distance isn't linear — in practice `cxo↔vp` is a smaller cognitive gap than `director↔vp` for expert-network briefs. Bucket values `{1.0, 0.7, 0.4, 0.1}` were hand-picked to reflect that flatness near the top and fall off more steeply at the bottom. Would switch to a learned monotone function once real ground-truth labels are available.
+- **YoE multiplier on senior+ bands only.** A "Director" with 3 years of tenure is rarely the senior the brief wants; the `max(0.6, yoe/15)` multiplier *bounds* the penalty so junior-looking-title veterans aren't zero'd out, while pulling back on green directors. No effect on junior/mid bands, where the mismatch isn't asymmetric.
+- **Substring `function_match` (not BGE cosine).** Function names in this domain are strict phrases — "regulatory affairs", "product management", "due diligence". BGE cosine would collapse "regulatory affairs" against "regulation enforcement" or "product design", producing false positives on a corpus where descriptions are templated. Partial-token matching (0.5 for one significant word of a multi-word function) is the sharper sieve. Would reintroduce cross-encoder rerank if we moved to free-text function queries.
+- **Jaccard on skill categories (not recall).** Recall `|inter|/|intent|` would give 1.0 to a role with a single matching category out of five requested — a degenerate top-scorer. Jaccard keeps the denominator honest: a role must have *proportional* overlap to score well.
+- **Recency τ=10 (not τ=5).** Expert networks value long-tenure hits even for roles that ended 5 years ago (a 2019 pharma Director is still a pharma Director). τ=5 scores that role at 0.37; τ=10 at 0.61 — closer to product reality. Easy to tune per-vertical if needed.
+
+**Effective query-conditionality of the signal *contributions*.** Although the weight magnitudes are fixed, the *active* signals vary with the query: when an intent says nothing about, say, industry or skill categories, those signals return the neutral **0.5** baseline and contribute only a flat half-weight — they don't discriminate. When the intent *does* specify, the signal bounces between 0 and 1 and discriminates fully. So "Former CPO at a Saudi petrochemical company" exercises industry + seniority + function at full discrimination (geography is a hard filter, not a signal), while "junior data engineers anywhere" neutralises industry/geography and lets function + seniority + semantic signals dominate. Fixed weights + intent-gated activation ≠ bureaucratic "one-size-fits-all" ranking.
 
 ### 5.2 Why constants, not LLM-emitted
 
@@ -274,6 +284,43 @@ similarity(a, b) = 1 if same current_company else 0.5 if same industry else 0
 Effect: avoids a top-5 that is 3 directors from the same company. The
 primary dim is `current_company` (duplication there is the worst offender
 in practice); industry is secondary.
+
+### 5.5 Hyperparameter tunings and their rationale
+
+All values below are config constants (env-override) in `app/core/config.py`.
+The numbers are defensible starting points, not learned optima — a production
+build with real engagement ground truth (see §10) should grid-search them.
+
+| Knob | Value | Why this number |
+|---|---|---|
+| `maxp_multi_role_bonus` | 0.05 | Single additional matched role adds ≈0.035 (log1p-scaled) — visible but can't overtake a single-full-score candidate with no second role. |
+| `maxp_cap` | 0.15 | Hard ceiling on the multi-role bonus. Capped so a candidate with 10 mediocre matches can't out-rank one with a single perfect match. |
+| `mmr_lambda` | 0.7 | Weight on relevance vs diversity. Verified against golden q05 (EMEA ops VPs): `lambda=1.0` returned three same-company hits in top-5; `lambda=0.7` resolved the duplication while keeping relevance dominant. |
+| `rerank_top_k` | 50 | Working set the reranker considers after RRF. Gives MaxP aggregation enough roles to pick from without paying for 100s of signal evaluations. |
+| `final_top_k` | 5 | Product-facing shortlist size ("above the fold"). Typical consulting brief length. |
+| `why_not_k` | 5 | Counter-explanation count. Ranks 6–10 cover the "nearly made it" band; below that, rationales aren't useful. |
+| `profile_fetch_cap` | 20 | Caps per-`/chat` Postgres roundtrips in the reranker. Downstream only consumes profiles for `final_top_k + why_not_k = 10`; 20 leaves MMR reordering headroom. Without the cap, a dead-ish candidate tail of ~50 caused ~60s latency (measured during integration). |
+| `prior_shortlist_boost` | 0.05 | Soft prior for refinement turns. Small enough that a refinement can still surface new matches; large enough to keep continuity when the user's ask is genuinely a narrowing. |
+| Signal weights | see §5.1 | Sum = 1.0 so `relevance_score ∈ [0, 1]`. Hand-picked priors; tunable via grid search on golden queries. |
+
+**Recency `τ` (10 years).** Expert networks frequently surface "former X at Y"
+briefs where Y's tenure ended 3–7 years ago — that history is the relevant
+signal. `τ=5` (half-life ~3.5yr) over-penalises those; `τ=10` (half-life ~7yr)
+keeps 5-year-old roles at ~0.61 which matches product intuition for this
+domain. Would be tighter for a "currently active" shop.
+
+**Seniority buckets `{1.0, 0.7, 0.4, 0.1}`.** Interval between head↔vp in the
+corpus is smaller than vp↔director (lots of movement at C-level; directors
+are a broader pool). The flatter-top, steeper-bottom bucket set reflects
+that. `1/(1+dist)` would give a uniform-ish `{1.0, 0.5, 0.33}` that
+over-penalises one-tier drift.
+
+**YoE multiplier floor `0.6`.** Below this, a title-matched candidate with
+short tenure risks dropping out of the top-20 entirely, which would be
+aggressive given the "Director" title is a reasonable proxy for the
+requested seniority even at lower YoE. The 0.6 floor keeps the title
+signal dominant while pulling senior-band scores for junior-looking
+titles.
 
 ---
 
@@ -497,15 +544,21 @@ Recall@50. Below that bound, everything is precision.
      tightly than their US equivalents.
 - **Scoring-logic fix.**
   1. **Promote geography from a soft signal to a HARD prefilter** when the
-     LLM classifies it as a REQUIREMENT (not a preference). The query
-     *"Senior healthcare strategist in Germany"* has geo as a requirement;
-     *"Senior healthcare strategist, ideally in Germany"* has it as a
-     preference. The `QueryIntent` decomposer differentiates these; only
-     the requirement case becomes a Chroma `where` filter.
+     LLM classifies it as a REQUIREMENT (not a preference) — **IMPLEMENTED**.
+     The query *"Senior healthcare strategist in Germany"* has geo as a
+     requirement; *"Senior healthcare strategist, ideally in Germany"* has
+     it as a preference. The `QueryIntent` decomposer fills `geographies`
+     only for the requirement case; `retriever._build_where` turns it into
+     a Chroma `where` filter (see `app/services/retriever.py:37`).
   2. **Within the filtered slice, z-score the dense similarity before
-     reranking.** Global-distribution-based cosine values are biased
-     toward the majority cluster; z-scoring against the local (filtered)
-     distribution removes the base-rate tilt from the soft signal.
+     reranking** — **PROPOSED, not in the current implementation.**
+     Global-distribution-based cosine values are biased toward the majority
+     cluster; z-scoring against the local (filtered) distribution would
+     remove the base-rate tilt from the `dense_cosine` soft signal. Easy
+     add: compute mean/std of `dense_score` across the returned top-K
+     before the reranker runs, then replace `role.dense_score` with
+     `(x - μ) / σ` clipped to [0, 1]. Parked because the hard-filter fix
+     already captures 80%+ of the wins on the golden query q04.
 - **Why this failure mode was picked (over the more obvious ones).** This
   failure demonstrates three things in one:
   - **Distributional-bias awareness** — naming covariate shift / base-rate

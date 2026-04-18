@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 
+from app.core.logging import get_logger
 from app.models.domain import (
     CandidateProfile,
     QueryIntent,
@@ -22,6 +23,8 @@ from app.models.domain import (
     ScoredCandidate,
     ScoredRole,
 )
+
+_log = get_logger("infoquest.reranker")
 
 
 class WeightedSignalReranker:
@@ -96,7 +99,14 @@ class WeightedSignalReranker:
                     continue
                 try:
                     raw = float(fn(role, intent))
-                except Exception:
+                except Exception as exc:  # keep pipeline alive, but surface the failure
+                    _log.warning(
+                        "signal_error",
+                        signal=sig_name,
+                        role_id=role.role.role_id,
+                        candidate_id=role.role.candidate_id,
+                        error=str(exc),
+                    )
                     raw = 0.0
                 sig_scores[sig_name] = raw
                 total += raw * float(weight)

@@ -40,11 +40,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # ---- source Postgres ----
-    database_url: str = Field(
-        default="postgresql://developer:devread2024@34.79.32.228:5432/candidate_profiles",
-        alias="DATABASE_URL",
-    )
+    # ---- source Postgres (no default: must be set via env; see .env.example) ----
+    database_url: str = Field(alias="DATABASE_URL")
 
     # ---- OpenRouter LLM ----
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")

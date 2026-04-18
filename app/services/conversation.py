@@ -18,9 +18,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from app.core.logging import get_logger
 from app.models.domain import QueryIntent, ScoredCandidate
 from app.ports.llm import LLMClient
 
+
+_log = get_logger("infoquest.conversation")
 
 _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "classify_followup.md"
@@ -72,8 +75,8 @@ def classify_followup(
             cls = str(result.get("classification", "")).strip().lower()
             if cls in {"refine", "new"}:
                 return cls  # type: ignore[return-value]
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("classify_followup_error", error=str(exc))
     return "new"
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
+from app.core.logging import get_logger
 from app.models.api import (
     ChatRequest,
     ChatResponse,
@@ -27,6 +28,9 @@ from app.models.ranking import (
     SignalScore,
     StageTiming,
 )
+
+
+_log = get_logger("infoquest.search_pipeline")
 
 
 def _to_highlight(c) -> ExpertHighlight:
@@ -169,7 +173,7 @@ def run_chat(
         explainer.explain_why_not(current_intent, tail, llm, top_candidates=head)
     stage("explain", t)
 
-    # 8. Persist session
+    # 8. Persist session (non-blocking — the response is still valid if this fails)
     try:
         sessions.append_turn(
             conv_id,
@@ -177,8 +181,12 @@ def run_chat(
             current_intent,
             [c.candidate_id for c in head],
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning(
+            "session_persist_error",
+            conversation_id=conv_id,
+            error=str(exc),
+        )
 
     # 9. Build response
     ranked: list[RankedExpert] = [

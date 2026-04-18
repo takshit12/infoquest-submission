@@ -4,10 +4,9 @@ import json
 import psycopg2
 import psycopg2.extras
 
-DSN = os.getenv(
-    "DATABASE_URL",
-    "postgresql://developer:devread2024@34.79.32.228:5432/candidate_profiles",
-)
+DSN = os.environ.get("DATABASE_URL")
+if not DSN:
+    raise SystemExit("DATABASE_URL not set — populate .env from .env.example first")
 
 def run():
     conn = psycopg2.connect(DSN, connect_timeout=15)

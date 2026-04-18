@@ -16,9 +16,12 @@ import concurrent.futures as cf
 from functools import lru_cache
 from pathlib import Path
 
+from app.core.logging import get_logger
 from app.models.domain import QueryIntent, ScoredCandidate
 from app.ports.llm import LLMClient
 
+
+_log = get_logger("infoquest.explainer")
 
 _EXPLAIN_PATH = Path(__file__).resolve().parent.parent / "prompts" / "explain_match.md"
 _WHY_NOT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "why_not.md"
@@ -112,7 +115,14 @@ def _explain_one_match(
     try:
         text = llm.chat(system=system, user=user, max_tokens=200, temperature=0.2)
         c.match_explanation = (text or "").strip()
-    except Exception:
+    except Exception as exc:
+        _log.warning(
+            "explain_llm_error",
+            kind="match",
+            candidate_id=c.candidate_id,
+            rank=rank,
+            error=str(exc),
+        )
         c.match_explanation = (
             "(explanation unavailable — scoring is deterministic; see signal_breakdown)"
         )
@@ -181,8 +191,14 @@ def _explain_one_why_not(
     try:
         text = llm.chat(system=system, user=user, max_tokens=100, temperature=0.2)
         c.why_not = (text or "").strip() or None
-    except Exception:
-        # Leave why_not as None on any failure.
+    except Exception as exc:
+        _log.warning(
+            "explain_llm_error",
+            kind="why_not",
+            candidate_id=c.candidate_id,
+            rank=rank,
+            error=str(exc),
+        )
         c.why_not = None
 
 

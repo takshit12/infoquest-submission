@@ -116,9 +116,23 @@ class OpenRouterClient:
         return json.loads(cleaned)
 
     def ping(self) -> bool:
+        """Liveness probe that actually validates the API key.
+
+        /models is a PUBLIC endpoint on OpenRouter (no auth required) — hitting
+        it gives a false-positive OK for a dead/revoked key. /auth/key is the
+        cheapest auth-requiring endpoint: it returns the key's metadata for a
+        valid key and 401 for an invalid one, and consumes zero inference
+        tokens.
+        """
+        import httpx
+
         try:
-            # /models is free to call, no tokens used
-            self._client.models.list()
-            return True
+            headers = {"Authorization": f"Bearer {self._client.api_key}"}
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(
+                    f"{str(self._client.base_url).rstrip('/')}/auth/key",
+                    headers=headers,
+                )
+            return resp.status_code == 200
         except Exception:
             return False

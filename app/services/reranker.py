@@ -31,11 +31,16 @@ class WeightedSignalReranker:
         signals: dict,
         maxp_bonus: float = 0.05,
         maxp_cap: float = 0.15,
+        profile_fetch_cap: int = 20,
     ) -> None:
         self.weights = dict(weights)
         self.signals = dict(signals)
         self.maxp_bonus = float(maxp_bonus)
         self.maxp_cap = float(maxp_cap)
+        # Only fetch full CandidateProfile (Postgres roundtrip) for the top-N
+        # candidates. Downstream only needs profiles for final_k + why_not_k
+        # (~10–15); fetching all ~50 would add ~10s of latency per /chat.
+        self.profile_fetch_cap = int(profile_fetch_cap)
 
     # ------------------------------------------------------------------
     # helpers
@@ -117,9 +122,11 @@ class WeightedSignalReranker:
             bests.append((cid, group))
         bests.sort(key=lambda kv: kv[1][0].final_score, reverse=True)
 
-        # We only attempt profile fetch for the top `rerank_top_k` candidates to limit DB calls.
-        # The reranker doesn't know rerank_top_k directly; use len(bests) — caller trims later.
-        for cid, group in bests:
+        # Cap real profile fetches (Postgres roundtrip) to the top-N candidates.
+        # Everyone beyond that gets a stub built from role metadata. Downstream
+        # only needs full profiles for final_k + why_not_k (~10–15), so 20 is
+        # ample headroom; fetching all ~50 adds ~10s of latency per /chat.
+        for idx, (cid, group) in enumerate(bests):
             best = group[0]
             # MaxP bonus: number of "matched enough" roles
             n_matched = sum(1 for r in group if r.final_score >= 0.3)
@@ -127,9 +134,9 @@ class WeightedSignalReranker:
             bonus = min(self.maxp_cap, self.maxp_bonus * math.log1p(extra))
             relevance = min(1.0, float(best.final_score) + float(bonus))
 
-            # Try to fetch the full profile; tolerate NotImplementedError.
+            # Try to fetch the full profile for the top-N; tolerate failures.
             profile: CandidateProfile | None = None
-            if profile_builder is not None:
+            if profile_builder is not None and idx < self.profile_fetch_cap:
                 try:
                     profile = profile_builder.fetch_candidate_profile(cid)
                 except NotImplementedError:

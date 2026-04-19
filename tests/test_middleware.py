@@ -11,12 +11,22 @@ from __future__ import annotations
 import importlib
 import os
 import re
+from pathlib import Path
 
 import pytest
 
-# Ensure required env exists before any ``app.main`` import. The repo's .env
-# normally provides DATABASE_URL but it is not auto-loaded for tests run via
-# ``pytest`` from the worktree, so we backfill a harmless dummy value if absent.
+# Load the repo's .env explicitly before any ``app.main`` import. pydantic-settings
+# would normally read it when ``Settings()`` is instantiated, but ``setdefault``
+# below would otherwise win and pin DATABASE_URL to a dummy value, bleeding into
+# other tests in the same session (notably the ingestion tests that hit Postgres).
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass
+
+# Final fallback if .env is absent (e.g. running tests inside a fresh worktree).
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
 os.environ.setdefault("OPENROUTER_API_KEY", "")
 os.environ.pop("API_KEY", None)

@@ -1,7 +1,7 @@
 """Application configuration via environment variables (pydantic-settings)."""
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -92,6 +92,21 @@ class Settings(BaseSettings):
     # ---- server ----
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
+
+    # ---- security & rate limiting ----
+    api_key: str | None = Field(default=None, alias="API_KEY")
+    cors_allow_origins: list[str] = Field(default_factory=list, alias="CORS_ALLOW_ORIGINS")
+    rate_limit_per_min: int = Field(default=60, alias="RATE_LIMIT_PER_MIN")
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _split_csv_origins(cls, value):
+        # accept either a comma-separated env string, an empty string, or a list
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     @property
     def weights(self) -> SignalWeights:

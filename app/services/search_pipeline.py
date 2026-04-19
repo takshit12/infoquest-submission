@@ -46,12 +46,23 @@ def _to_highlight(c) -> ExpertHighlight:
         headline = r.candidate_headline or ""
     current_title = r.job_title if (r is not None and r.is_current) else None
     current_company = r.company if (r is not None and r.is_current) else None
+    # Fall back to the candidate's actual current role (from the profile) so
+    # the response still shows a title when the MATCHED role is historical.
+    if current_title is None and c.candidate is not None:
+        cur = c.candidate.current_role
+        if cur is not None:
+            current_title = cur.job_title
+            current_company = cur.company
     return ExpertHighlight(
         candidate_id=c.candidate_id,
         full_name=full_name or c.candidate_id[:8],
         headline=headline or "",
         current_title=current_title,
         current_company=current_company,
+        matched_role_title=(r.job_title if r is not None else None),
+        matched_role_company=(r.company if r is not None else None),
+        matched_role_is_current=(bool(r.is_current) if r is not None else None),
+        seniority_tier=(r.seniority_tier if r is not None else None),
         industry=(r.industry if r is not None else None),
         country=(r.candidate_country if r is not None else None),
         city=(r.candidate_city if r is not None else None),
@@ -60,6 +71,7 @@ def _to_highlight(c) -> ExpertHighlight:
             or 0
         ),
         top_skills=list((r.skill_categories if r is not None else [])[:5]),
+        languages=list((r.languages if r is not None else [])),
     )
 
 

@@ -61,13 +61,24 @@ class ExpertHighlight(BaseModel):
     candidate_id: str
     full_name: str
     headline: str
+    # The candidate's CURRENT role (is_current=true). Null if the matched
+    # role was historical — see matched_role_* for what the ranking used.
     current_title: str | None = None
     current_company: str | None = None
+    # The role that actually drove the ranking (== current when require_current
+    # is not set; may be a historical role when the query asks for "former X").
+    matched_role_title: str | None = None
+    matched_role_company: str | None = None
+    matched_role_is_current: bool | None = None
+    seniority_tier: str | None = None  # derived from matched role's job title
     industry: str | None = None
     country: str | None = None
     city: str | None = None
     years_of_experience: int
     top_skills: list[str] = Field(default_factory=list)
+    # Normalized ISO-639-1 language codes the candidate speaks. Populated
+    # from role metadata; empty list if unknown.
+    languages: list[str] = Field(default_factory=list)
 
 
 class RankedExpert(BaseModel):

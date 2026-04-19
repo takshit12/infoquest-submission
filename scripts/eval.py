@@ -96,13 +96,24 @@ def _extract_fields_from_result(item: dict[str, Any]) -> dict[str, Any]:
     langs = expert.get("languages") or item.get("languages") or []
     if isinstance(langs, list) and langs and isinstance(langs[0], dict):
         langs = [L.get("name") or L.get("language") for L in langs if L]
+    # Matched role title is preferred for title_contains_any when the query
+    # asks for a historical role ("former X"); fall back to current_title for
+    # queries that rank on the current role; fall back to headline last.
+    matched_title = (expert.get("matched_role_title") or "").strip()
+    current_title = (expert.get("current_title") or "").strip()
+    headline = (expert.get("headline") or "").strip()
+    title_for_match = matched_title or current_title or headline
     return {
         "country": (expert.get("country") or "").strip(),
-        "title": (expert.get("current_title") or expert.get("headline") or "").strip(),
+        "title": title_for_match,
         "industry": (expert.get("industry") or "").strip(),
         "years_of_experience": int(expert.get("years_of_experience") or 0),
         "seniority": (expert.get("seniority_tier") or expert.get("seniority") or "").strip().lower(),
-        "is_current": expert.get("is_current"),
+        "is_current": (
+            expert.get("matched_role_is_current")
+            if expert.get("matched_role_is_current") is not None
+            else expert.get("is_current")
+        ),
         "languages": [str(L) for L in (langs or []) if L],
     }
 

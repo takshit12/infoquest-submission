@@ -135,6 +135,41 @@ def _detect_function(query: str) -> str | None:
     return None
 
 
+_COUNTRY_NAME_ALIASES: dict[str, str] = {
+    # Full names / common aliases → ISO alpha-2.
+    # Limited to what's actually present in the corpus (see inspect_data.py).
+    "united states": "US", "usa": "US", "america": "US",
+    "united kingdom": "GB", "britain": "GB", "england": "GB",
+    "germany": "DE", "deutschland": "DE",
+    "france": "FR",
+    "italy": "IT",
+    "spain": "ES",
+    "netherlands": "NL", "holland": "NL",
+    "switzerland": "CH",
+    "belgium": "BE",
+    "ireland": "IE",
+    "poland": "PL",
+    "portugal": "PT",
+    "austria": "AT",
+    "india": "IN",
+    "pakistan": "PK",
+    "china": "CN",
+    "japan": "JP",
+    "singapore": "SG",
+    "south korea": "KR", "korea": "KR",
+    "saudi arabia": "SA", "saudi": "SA",
+    "united arab emirates": "AE", "uae": "AE", "emirates": "AE",
+    "qatar": "QA",
+    "egypt": "EG",
+    "oman": "OM",
+    "turkey": "TR",
+    "mexico": "MX",
+    "canada": "CA",
+    "brazil": "BR",
+    "argentina": "AR",
+}
+
+
 def _detect_geographies(query: str) -> list[str]:
     low = query.lower()
     geos: set[str] = set()
@@ -144,12 +179,21 @@ def _detect_geographies(query: str) -> list[str]:
         if alias_key in low:
             geos |= resolve_region(alias_key)
 
-    # explicit alpha-2 code mentions (case-insensitive on word boundaries)
+    # country names / common aliases (case-insensitive word-boundary match)
+    for name, code in _COUNTRY_NAME_ALIASES.items():
+        if re.search(rf"\b{re.escape(name)}\b", low):
+            geos.add(code)
+
+    # Uppercase alpha-2 code mentions. Deliberately case-SENSITIVE to avoid
+    # false positives from common English words: "at" (AT=Austria),
+    # "us" (US=United States, but also a pronoun), "in" (IN=India but also
+    # a preposition), "or" (OR=Oregon region), "is" (IS=Iceland), etc.
+    # Written query usage almost always spells country names out; explicit
+    # codes appear only in UPPER, so UPPER-only is the safer filter.
     codes = _all_country_codes()
-    # build one combined regex for speed/determinism
-    pattern = re.compile(r"\b(" + "|".join(re.escape(c) for c in codes) + r")\b", re.I)
+    pattern = re.compile(r"\b(" + "|".join(re.escape(c) for c in codes) + r")\b")
     for m in pattern.finditer(query):
-        geos.add(m.group(1).upper())
+        geos.add(m.group(1))
 
     return sorted(geos)
 

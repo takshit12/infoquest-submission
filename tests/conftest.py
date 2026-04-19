@@ -169,18 +169,34 @@ class FakeLLM:
 class FakeSessionStore:
     def __init__(self):
         self._conv: dict[str, list[dict]] = {}
+        self._tokens: dict[str, str] = {}
 
     def create(self):
+        import secrets
         import uuid
 
         cid = str(uuid.uuid4())
+        token = f"tok-{secrets.token_urlsafe(16)}"
         self._conv[cid] = []
-        return cid
+        self._tokens[cid] = token
+        return cid, token
 
     def exists(self, cid):
         return cid in self._conv
 
+    def verify_token(self, cid, token):
+        import secrets
+
+        if not cid or not token:
+            return False
+        stored = self._tokens.get(cid) or ""
+        if not stored:
+            return False
+        return secrets.compare_digest(stored, token)
+
     def append_turn(self, cid, query, intent, top_candidate_ids):
+        from datetime import datetime, timezone
+
         self._conv.setdefault(cid, [])
         idx = len(self._conv[cid])
         self._conv[cid].append(
@@ -189,6 +205,7 @@ class FakeSessionStore:
                 "query": query,
                 "intent": intent,
                 "top_candidate_ids": top_candidate_ids,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
         return idx
@@ -202,7 +219,29 @@ class FakeSessionStore:
         return turns[-1]["top_candidate_ids"] if turns else []
 
     def history(self, cid):
-        return list(self._conv.get(cid, []))
+        # Mirror the SQLite adapter's output shape so the conversations
+        # endpoint can render this without a separate code path.
+        out = []
+        for t in self._conv.get(cid, []):
+            intent = t["intent"]
+            try:
+                intent_dict = (
+                    intent.model_dump() if hasattr(intent, "model_dump") else dict(intent)
+                )
+            except Exception:
+                intent_dict = {}
+            out.append(
+                {
+                    "turn_index": t["turn_index"],
+                    "query": t["query"],
+                    "query_intent": intent_dict,
+                    "top_candidate_ids": list(t["top_candidate_ids"]),
+                    "timestamp": t.get(
+                        "timestamp", __import__("datetime").datetime.now().isoformat()
+                    ),
+                }
+            )
+        return out
 
     def meta(self, cid):
         from datetime import datetime, timezone

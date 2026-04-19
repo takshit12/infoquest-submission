@@ -1,7 +1,15 @@
-"""SQLite session store — conversation turns + QueryIntent history."""
+"""SQLite session store — conversation turns + QueryIntent history.
+
+Each conversation row carries an ``auth_token`` — a per-conversation bearer
+secret returned to the caller on ``create()`` and required (via constant-time
+compare in :meth:`verify_token`) for any follow-up read or write. This is the
+fix for the IDOR where any client holding a conversation UUID could fetch
+another caller's turn history.
+"""
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +22,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id            TEXT PRIMARY KEY,
     created_at    TEXT NOT NULL,
-    last_activity TEXT NOT NULL
+    last_activity TEXT NOT NULL,
+    auth_token    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -51,18 +60,29 @@ class SQLiteSessionStore:
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            # Migrate older DBs that pre-date the auth_token column.
+            cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+            }
+            if "auth_token" not in cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''"
+                )
 
     # ---- SessionStore Protocol ----
 
-    def create(self) -> str:
+    def create(self) -> tuple[str, str]:
         conv_id = str(uuid.uuid4())
+        token = secrets.token_urlsafe(32)
         now = _now_iso()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO conversations (id, created_at, last_activity) VALUES (?, ?, ?)",
-                (conv_id, now, now),
+                "INSERT INTO conversations (id, created_at, last_activity, auth_token) "
+                "VALUES (?, ?, ?, ?)",
+                (conv_id, now, now, token),
             )
-        return conv_id
+        return conv_id, token
 
     def exists(self, conversation_id: str) -> bool:
         with self._conn() as conn:
@@ -70,6 +90,21 @@ class SQLiteSessionStore:
                 "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
         return row is not None
+
+    def verify_token(self, conversation_id: str, token: str) -> bool:
+        if not conversation_id or not token:
+            return False
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT auth_token FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return False
+        stored = row["auth_token"] or ""
+        if not stored:
+            return False
+        return secrets.compare_digest(stored, token)
 
     def append_turn(
         self,
@@ -80,11 +115,13 @@ class SQLiteSessionStore:
     ) -> int:
         now = _now_iso()
         with self._conn() as conn:
-            # auto-create conversation if caller didn't
+            # auto-create conversation if caller didn't (no token issued in this
+            # auto-path; the caller already holds the cid so the IDOR check is
+            # the caller's responsibility — we don't issue a fresh token here).
             conn.execute(
-                "INSERT OR IGNORE INTO conversations (id, created_at, last_activity) "
-                "VALUES (?, ?, ?)",
-                (conversation_id, now, now),
+                "INSERT OR IGNORE INTO conversations (id, created_at, last_activity, auth_token) "
+                "VALUES (?, ?, ?, ?)",
+                (conversation_id, now, now, ""),
             )
             row = conn.execute(
                 "SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns "

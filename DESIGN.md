@@ -21,7 +21,9 @@ noise at rank 1–3 is expensive, recall loss at rank 50 is almost invisible.
 **Non-goals (what I explicitly chose NOT to build).**
 
 - No UI. FastAPI + curl/Swagger is enough to demo the model.
-- No authentication / multi-tenancy. Single operator, single session store.
+- No multi-tenancy / user accounts. Optional `X-API-Key` perimeter and
+  per-conversation `X-Session-Token` bearer ship as middleware (see §13), but
+  there are no users-as-first-class-objects, no roles, no quota per tenant.
 - No continuous-training loop. Weights are tuned against the golden set offline.
 - No vector DB replica / HA. Chroma is local-disk persistent; one process.
 - No streaming `/chat`. Blocking JSON response keeps the contract simple; the
@@ -60,8 +62,8 @@ noise at rank 1–3 is expensive, recall loss at rank 50 is almost invisible.
             (4) MaxP aggregation (roles -> candidates)
                              |
                              v
-         (5) weighted signals rerank  (industry / function /
-             seniority / skill_cat / recency / dense / bm25)
+         (5) weighted signals rerank  (industry / function / seniority /
+             skill_cat / recency / dense / bm25 / trajectory)
                              |
                              v
       (6) MMR diversification (lambda=0.7 over current_company + industry)
@@ -72,7 +74,7 @@ noise at rank 1–3 is expensive, recall loss at rank 50 is almost invisible.
 
 **Pipeline in one paragraph.** The LLM emits a structured `QueryIntent`
 separating hard constraints (geography, `is_current`, `min_yoe`) from soft
-signal flags (which of the 7 weighted signals apply). Hard constraints become
+signal flags (which of the 8 weighted signals apply). Hard constraints become
 Chroma-side metadata filters; soft flags activate deterministic reranking.
 Dense (BGE + Chroma) and sparse (BM25) retrievers each return top-100 role
 hits; RRF fuses them by rank. MaxP aggregates multi-role candidates by their
@@ -250,7 +252,7 @@ Three reasons. Each is load-bearing.
    identical results across runs. LLM-emitted weights are non-deterministic
    even at `temperature=0`.
 2. **Calibratability.** Weights can be tuned against `golden_queries.json`
-   via grid search (10 queries, 7 signals → tractable). LLM-emitted weights
+   via grid search (10 queries, 8 signals → tractable). LLM-emitted weights
    can't be tuned.
 3. **Non-falsifiability escape.** If the LLM emits weights *and* explains the
    ranking, it can always self-consistently justify a bad ordering. Keeping
@@ -633,10 +635,12 @@ predicate harness is the dev-time stand-in.
 | Conversation | Soft-prior boost | Restrict-to-prior-shortlist | Prior shortlist may have zero matches for the refinement |
 | Sparse retriever | BM25 (rank_bm25) | SPLADE / uniCOIL | Zero-infra, no training; SPLADE overkill for this scale |
 | Session store | SQLite | Redis / Postgres | Single-process dev app; SQLite is one import away |
+| Trajectory signal | Per-role enum (4 states) | Multi-role sequence scoring | Per-role view fits the existing reranker; multi-role would need `ScoredRole`/`reranker.rerank()` plumbing — deferred (sec. 11) |
+| Conversation auth | Per-conversation token (`X-Session-Token`) | conversation_id alone (UUID-as-secret) / full user-account model | UUIDs are unguessable but bleed via logs/URLs; bearer adds explicit revocability + constant-time compare without standing up a user model |
 
 ---
 
-## Auth & probes
+## 13. Auth & probes
 
 - **Probes.** `GET /live` is the liveness probe — returns 200 with `{status, version}` and never touches a dependency, so an upstream blip can't kill the pod. `GET /ready` is the readiness probe — pings Postgres, Chroma, sessions, LLM and returns `degraded` if any are down. `GET /health` stays as a back-compat alias for `/ready` so existing clients keep working. Both probe paths are excluded from the access log and from the API-key middleware so infra traffic doesn't pollute either.
 - **Per-conversation session token.** First `/chat` (no `conversation_id` in the body) returns a one-time `session_token` (`secrets.token_urlsafe(32)`) bound to that conversation. The caller must echo it as `X-Session-Token` on follow-up `/chat` and on `GET /conversations/{id}` — missing → 401, mismatch → 403 (constant-time compare). This closes the IDOR where any client holding a conversation UUID could read another caller's turn history. Follow-up responses do NOT echo the token (keeps the secret out of repeated payloads).

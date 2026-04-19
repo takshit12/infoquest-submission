@@ -38,6 +38,7 @@ from app.core import config as config_module  # noqa: E402
 from app.core.middleware import (  # noqa: E402
     APIKeyMiddleware,
     AccessLogMiddleware,
+    BodySizeLimitMiddleware,
     RequestIDMiddleware,
     SecurityHeadersMiddleware,
 )
@@ -216,3 +217,63 @@ def test_rate_limit_kicks_in(monkeypatch: pytest.MonkeyPatch) -> None:
 
     statuses = [client.get("/").status_code for _ in range(5)]
     assert any(code == 429 for code in statuses), f"expected a 429, got {statuses}"
+
+
+# ----------------------------- Body size limit ----------------------------
+
+
+def _build_body_limit_app() -> FastAPI:
+    """Throwaway app gated only by ``BodySizeLimitMiddleware`` for isolation."""
+    app = FastAPI()
+    app.add_middleware(BodySizeLimitMiddleware)
+
+    @app.post("/echo")
+    def echo(body: dict):
+        return body
+
+    return app
+
+
+def test_body_size_limit_rejects_oversize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requests whose Content-Length exceeds the cap must be rejected with 413.
+
+    The middleware reads the cap from settings; we set it small enough that a
+    plausibly-sized payload is over the line.
+    """
+    _reset_settings_cache(
+        monkeypatch,
+        API_KEY=None,
+        MAX_BODY_SIZE_BYTES="1024",  # 1 KB, easy to exceed
+    )
+    app = _build_body_limit_app()
+    client = TestClient(app)
+
+    # Construct a payload that explicitly advertises Content-Length=2_000_000
+    oversize_payload = b"{" + (b"\"k\":\"" + b"x" * 2_000_000 + b"\"") + b"}"
+    response = client.post(
+        "/echo",
+        content=oversize_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": "2000000",
+        },
+    )
+
+    assert response.status_code == 413
+    assert "request body too large" in response.text
+
+
+def test_body_size_limit_allows_small_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requests within the configured cap are passed through unmodified."""
+    _reset_settings_cache(
+        monkeypatch,
+        API_KEY=None,
+        MAX_BODY_SIZE_BYTES="1048576",
+    )
+    app = _build_body_limit_app()
+    client = TestClient(app)
+
+    response = client.post("/echo", json={"hello": "world"})
+
+    assert response.status_code == 200
+    assert response.json() == {"hello": "world"}

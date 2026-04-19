@@ -618,5 +618,12 @@ Recall@50. Below that bound, everything is precision.
 
 ---
 
+## Auth & probes
+
+- **Probes.** `GET /live` is the liveness probe — returns 200 with `{status, version}` and never touches a dependency, so an upstream blip can't kill the pod. `GET /ready` is the readiness probe — pings Postgres, Chroma, sessions, LLM and returns `degraded` if any are down. `GET /health` stays as a back-compat alias for `/ready` so existing clients keep working. Both probe paths are excluded from the access log and from the API-key middleware so infra traffic doesn't pollute either.
+- **Per-conversation session token.** First `/chat` (no `conversation_id` in the body) returns a one-time `session_token` (`secrets.token_urlsafe(32)`) bound to that conversation. The caller must echo it as `X-Session-Token` on follow-up `/chat` and on `GET /conversations/{id}` — missing → 401, mismatch → 403 (constant-time compare). This closes the IDOR where any client holding a conversation UUID could read another caller's turn history. Follow-up responses do NOT echo the token (keeps the secret out of repeated payloads).
+- **API-key perimeter.** The optional `X-API-Key` middleware (set `API_KEY` to enable) is the *outer* gate for shared-secret deployments and is independent of the per-conversation token: API key admits the caller to the API at all, the session token decides which conversation rows they can read.
+- **Body-size cap.** `BodySizeLimitMiddleware` rejects requests whose `Content-Length` exceeds `MAX_BODY_SIZE_BYTES` (default 1 MiB) with a 413, before any parsing.
+
 *End of design document. Runbook in [README.md](./README.md). Eval harness:
 `python scripts/eval.py --help`.*

@@ -113,19 +113,23 @@ def run_chat(
             StageTiming(stage=name, elapsed_ms=(time.time() - start) * 1000.0)
         )
 
-    # Session setup
+    # Session setup. ``new_token`` is set only when WE create the conversation
+    # — i.e., on first turn. Follow-up turns (caller passed a known
+    # conversation_id and a verified X-Session-Token) get None so the secret
+    # isn't echoed back on every response.
+    new_token: str | None = None
     if req.conversation_id:
         conv_id = req.conversation_id
         if not sessions.exists(conv_id):
             # Treat unknown conv_id as a new conversation to avoid 404s; create one.
-            conv_id = sessions.create()
+            conv_id, new_token = sessions.create()
             prior_intent = None
             prior_ids: list[str] = []
         else:
             prior_intent = sessions.last_intent(conv_id)
             prior_ids = sessions.last_candidate_ids(conv_id) or []
     else:
-        conv_id = sessions.create()
+        conv_id, new_token = sessions.create()
         prior_intent = None
         prior_ids = []
 
@@ -251,5 +255,6 @@ def run_chat(
         query=req.query,
         results=ranked,
         returned_at=datetime.now(timezone.utc),
+        session_token=new_token,
         debug=debug_payload,
     )

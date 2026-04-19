@@ -16,9 +16,14 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 
 
-# Routes that never require an API key (public surface + docs + healthcheck).
+# Routes that never require an API key (public surface + docs + infra probes).
 _API_KEY_EXEMPT_PATHS: frozenset[str] = frozenset(
-    {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+    {"/", "/health", "/live", "/ready", "/docs", "/redoc", "/openapi.json"}
+)
+
+# Probe paths that should never appear in the access log (noisy infra traffic).
+_ACCESS_LOG_SKIP_PATHS: frozenset[str] = frozenset(
+    {"/health", "/live", "/ready"}
 )
 
 
@@ -80,8 +85,8 @@ class AccessLogMiddleware:
         path: str = scope.get("path", "")
         method: str = scope.get("method", "")
 
-        # Skip noisy health probes.
-        if path == "/health":
+        # Skip noisy health/liveness/readiness probes.
+        if path in _ACCESS_LOG_SKIP_PATHS:
             await self.app(scope, receive, send)
             return
 
@@ -179,6 +184,45 @@ class APIKeyMiddleware:
         await self.app(scope, receive, send)
 
 
+class BodySizeLimitMiddleware:
+    """Reject requests whose ``Content-Length`` exceeds the configured cap.
+
+    Runs outermost so we don't waste CPU parsing oversize payloads. We rely
+    on ``Content-Length`` only — chunked uploads without a length aren't
+    expected for a JSON API and pass through to the framework's own limits.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not _is_http(scope):
+            await self.app(scope, receive, send)
+            return
+
+        max_bytes = int(get_settings().max_body_size_bytes or 0)
+        if max_bytes <= 0:
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+        raw_len = headers.get("content-length")
+        if raw_len is not None:
+            try:
+                length = int(raw_len)
+            except ValueError:
+                length = -1
+            if length > max_bytes:
+                await _send_json_response(
+                    send,
+                    status=413,
+                    payload=b'{"detail":"request body too large"}',
+                )
+                return
+
+        await self.app(scope, receive, send)
+
+
 async def _send_json_response(send: Send, *, status: int, payload: bytes) -> None:
     """Tiny ASGI JSON-response helper for short-circuited middleware responses."""
     await send(
@@ -199,4 +243,5 @@ __all__ = [
     "AccessLogMiddleware",
     "SecurityHeadersMiddleware",
     "APIKeyMiddleware",
+    "BodySizeLimitMiddleware",
 ]

@@ -25,6 +25,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.middleware import (
     AccessLogMiddleware,
     APIKeyMiddleware,
+    BodySizeLimitMiddleware,
     RequestIDMiddleware,
     SecurityHeadersMiddleware,
 )
@@ -62,11 +63,13 @@ app = FastAPI(
 # FastAPI invokes middleware in reverse-registration order on requests
 # (last-added runs first). So register innermost-first: security headers wrap
 # the response, then access log wraps everything, then API key gating, then
-# request-id binding so all subsequent layers see the contextvar.
+# request-id binding so all subsequent layers see the contextvar, finally
+# the body-size limit so oversize requests short-circuit before any work.
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AccessLogMiddleware)
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
 
 # CORS only if explicitly configured (avoid accidental "*" wildcard).
 if _settings.cors_allow_origins:
@@ -102,4 +105,6 @@ def root():
         "version": __version__,
         "docs": "/docs",
         "health": "/health",
+        "live": "/live",
+        "ready": "/ready",
     }

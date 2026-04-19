@@ -25,6 +25,13 @@ class HealthResponse(BaseModel):
     deps: DependencyStatus
 
 
+class LivenessResponse(BaseModel):
+    """Cheap process-up probe — no dependency pings."""
+
+    status: str  # always "ok"
+    version: str
+
+
 # ============================================================
 #                         /ingest
 # ============================================================
@@ -95,6 +102,11 @@ class ChatResponse(BaseModel):
     query: str
     results: list[RankedExpert]
     returned_at: datetime
+    # Bearer token returned only on the FIRST turn of a NEW conversation. The
+    # caller must echo it as ``X-Session-Token`` on follow-up /chat calls and
+    # on GET /conversations/{id}. Omitted on subsequent turns to keep the
+    # secret out of repeated payloads.
+    session_token: str | None = None
     debug: DebugPayload | None = None  # populated when ?debug=true
 
 

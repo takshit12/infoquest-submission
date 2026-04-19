@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     api_key: str | None = Field(default=None, alias="API_KEY")
     cors_allow_origins: list[str] = Field(default_factory=list, alias="CORS_ALLOW_ORIGINS")
     rate_limit_per_min: int = Field(default=60, alias="RATE_LIMIT_PER_MIN")
+    max_body_size_bytes: int = Field(default=1_048_576, alias="MAX_BODY_SIZE_BYTES")
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

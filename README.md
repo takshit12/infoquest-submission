@@ -131,29 +131,31 @@ curl -s localhost:8000/health
 }
 ```
 
-### 2. Ingest (first time)
+### 2. Ingest
+
+Smoke ingest (200 roles, ~5 seconds — recommended first run):
 
 ```bash
 curl -X POST localhost:8000/ingest \
      -H 'content-type: application/json' \
-     -d '{"reset": true}'
+     -d '{"limit": 200, "reset": false}'
 ```
 
 ```json
 {
-  "candidates": 10120,
-  "roles": 24635,
+  "candidates": 81,
+  "roles": 200,
   "dense_docs": 24635,
-  "sparse_docs": 24635,
-  "elapsed_seconds": 600.0
+  "sparse_docs": 200,
+  "elapsed_seconds": 5.09
 }
 ```
 
-> **Note on timing.** A measured 200-role smoke ingest takes ~5s end-to-end on an
-> Apple-silicon laptop; the full corpus scales roughly linearly to ~8–12 min
-> depending on (a) CPU vs MPS, (b) first-run sentence-transformers model download
-> (~130 MB), and (c) round-trip latency to the remote Postgres. Pass `{"limit": 200}`
-> for a fast first-run sanity check before the full ingest.
+Captured 2026-04-19 against the live dev Postgres. Full corpus (`{"reset": true}`,
+no `limit`) returns the same shape with `candidates: 10120` / `roles: 24635` /
+`sparse_docs: 24635` and `elapsed_seconds` ≈ 8–12 minutes on an Apple-silicon
+laptop, depending on (a) CPU vs MPS, (b) first-run sentence-transformers model
+download (~130 MB), and (c) Postgres round-trip latency.
 
 ### 3. Chat — simple NL query (the assessment example)
 
@@ -163,33 +165,63 @@ curl -X POST localhost:8000/chat \
      -d '{"query":"Find me regulatory affairs experts in the pharmaceutical industry in the Middle East."}'
 ```
 
+Captured 2026-04-19 against the full 24,635-role corpus — top 2 of 5 shown
+(candidates are synthetic, hence the noisy headlines). Note the **explainer
+honestly admits weak fit** when the dataset doesn't have a strong match — that's
+a feature: the LLM is grounded in the actual signal scores, not the user's hope.
+
 ```json
 {
-  "conversation_id": "9c8a8f7b-2d12-4a0f-8e3a-f12345abcdef",
+  "conversation_id": "5e9aff4e-f6a2-4b86-a482-d22e12f4de3e",
   "query": "Find me regulatory affairs experts in the pharmaceutical industry in the Middle East.",
+  "session_token": "GFVSohmZNk2PJeeQjXtAPRGkuD8iX7nfycFOBUnhoEI",
   "results": [
     {
       "rank": 1,
       "expert": {
-        "candidate_id": "c_1042",
-        "full_name": "Layla Nasser",
-        "headline": "Regulatory Affairs Director — MENA pharma",
-        "current_title": "Director, Regulatory Affairs",
-        "current_company": "Gulf Pharmaceuticals Industries",
-        "industry": "Pharmaceuticals",
-        "country": "AE",
-        "city": "Dubai",
-        "years_of_experience": 14,
-        "top_skills": ["GCC drug registration", "CTD submissions", "QMS"]
+        "candidate_id": "df7d4107-5c7b-444a-ad4c-17caab8df4ed",
+        "full_name": "Diana Al-Rashid",
+        "headline": "Senior Software Engineer with 7+ years of experience in Teaching entrepreneurship",
+        "current_title": "Senior Software Engineer",
+        "current_company": "NYSIR",
+        "matched_role_title": "Principal Financial Analyst",
+        "matched_role_company": "A111",
+        "matched_role_is_current": false,
+        "seniority_tier": "staff_principal",
+        "industry": "Venture Capital and Private Equity Principals",
+        "country": "SY",
+        "city": "Damascus",
+        "years_of_experience": 17,
+        "top_skills": ["Legal", "Teaching", "Business"],
+        "languages": ["korean", "armenian"]
       },
-      "relevance_score": 0.87,
-      "match_explanation": "UAE-based, 14 yrs regulatory affairs in Pharmaceuticals. Leads GCC drug registration — exact function and region match.",
+      "relevance_score": 0.538,
+      "match_explanation": "Diana Al-Rashid does not match this search. Despite a high industry_match score (1.00), this appears to be a data quality issue — her actual background is Principal Financial Analyst in venture capital with software engineering and teaching entrepreneurship experience, which has zero relevance to regulatory affairs (function_match=0.00, bm25_score=0.00) or pharmaceutical operations.",
       "why_not": null,
-      "highlights": ["Pharmaceuticals", "regulatory affairs", "UAE"]
+      "highlights": ["17 yrs experience", "Staff Principal at A111", "Based in SY"]
+    },
+    {
+      "rank": 2,
+      "expert": {
+        "candidate_id": "a718137e-c658-43a2-9720-7ed168943eeb",
+        "full_name": "Ibrahim Chen",
+        "headline": "Senior Technical Writer specializing in Conseil en organisation et management",
+        "matched_role_title": "Lead Full Stack Developer",
+        "matched_role_company": "Danvantri Farma",
+        "matched_role_is_current": false,
+        "seniority_tier": "senior",
+        "industry": "Pharmaceutical",
+        "country": "EG",
+        "years_of_experience": 14
+      },
+      "relevance_score": 0.526,
+      "match_explanation": "Ibrahim Chen's pharmaceutical industry background at Danvantri Farma (Egypt) and 14 years of experience provide strong industry and geography alignment, but his current role as Lead Full Stack Developer and lack of regulatory affairs function signals (function_match: 0.00, bm25_score: 0.00) indicate a significant gap.",
+      "why_not": null,
+      "highlights": ["14 yrs experience", "Senior at Danvantri Farma", "Based in EG"]
     }
-    /* ... 4 more ranked experts ... */
+    /* ... 3 more ranked experts ... */
   ],
-  "returned_at": "2026-04-17T10:11:23.456Z",
+  "returned_at": "2026-04-19T14:46:35.039175Z",
   "debug": null
 }
 ```
@@ -226,39 +258,67 @@ prior 10 and can surface better matches that the first turn missed.
 ```bash
 curl -X POST 'localhost:8000/chat?debug=true' \
      -H 'content-type: application/json' \
-     -d '{"query":"Senior healthcare strategist in Germany"}'
+     -d '{"query":"Senior healthcare strategist in Germany", "include_why_not": false, "top_k": 3}'
 ```
+
+Captured 2026-04-19. The full `debug` payload (trimmed below to query_intent +
+the top-1 candidate's signal breakdown + stage timings) shows the 8 weighted
+signals and how each contributes to `final_score`.
 
 ```json
 {
-  "conversation_id": "...",
+  "conversation_id": "b7b80f58-422c-460f-8ef8-81855cd78e42",
   "query": "Senior healthcare strategist in Germany",
-  "results": [ /* as above */ ],
-  "returned_at": "...",
+  "session_token": "1s7Pl1xBzkZfe8rKKYV9VYhNWdDfJHSJwYP42HT1K58",
+  "results": [/* top 3 — Leila Al-Rashid (DE), Charlotte Hassan (DE), Bilal Smith (DE), all healthcare-adjacent */],
+  "returned_at": "2026-04-19T14:47:23.989089Z",
   "debug": {
     "query_intent": {
-      "geographies": ["DE"], "industries": ["Hospitals and Health Care"],
-      "seniority_band": "senior", "function": "strategy"
+      "raw_query": "Senior healthcare strategist in Germany",
+      "rewritten_search": "senior healthcare strategist in Germany",
+      "keywords": ["healthcare", "strategist", "strategy", "Germany"],
+      "geographies": ["DE"],
+      "function": "strategy",
+      "industries": ["Healthcare", "Hospitals and Health Care"],
+      "seniority_band": "senior",
+      "career_trajectory": null,
+      "decomposer_source": "merged"
     },
-    "hard_filters": {"country_in": ["DE"]},
-    "dense_top":   [{"role_id": "r_871", "score": 0.71}, /* ... */],
-    "sparse_top":  [{"role_id": "r_871", "score": 4.2 }, /* ... */],
-    "fused_roles": [{"role_id": "r_871", "rrf": 0.0312}, /* ... */],
+    "hard_filters": {"geographies": ["DE"]},
     "ranking_breakdown": [
       {
-        "candidate_id": "c_7712", "rank": 1, "final_score": 0.83,
+        "candidate_id": "9e62e9df-8b0a-4b55-b00e-fd74cc139f11",
+        "rank": 1,
+        "final_score": 0.660,
         "signals": [
-          {"name": "industry_match", "raw": 1.0, "weight": 0.25, "weighted": 0.25},
-          {"name": "function_match", "raw": 0.9, "weight": 0.20, "weighted": 0.18},
-          {"name": "seniority_match", "raw": 1.0, "weight": 0.20, "weighted": 0.20}
-        ]
+          {"name": "industry_match",       "raw": 1.00, "weight": 0.25, "weighted": 0.250},
+          {"name": "function_match",       "raw": 0.00, "weight": 0.20, "weighted": 0.000},
+          {"name": "seniority_match",      "raw": 1.00, "weight": 0.20, "weighted": 0.200},
+          {"name": "skill_category_match", "raw": 0.50, "weight": 0.10, "weighted": 0.050},
+          {"name": "recency_decay",        "raw": 1.00, "weight": 0.08, "weighted": 0.080},
+          {"name": "dense_cosine",         "raw": 0.62, "weight": 0.09, "weighted": 0.055},
+          {"name": "bm25_score",           "raw": 0.00, "weight": 0.03, "weighted": 0.000},
+          {"name": "trajectory_match",     "raw": 0.50, "weight": 0.05, "weighted": 0.025}
+        ],
+        "maxp_bonus": 0.0,
+        "prior_shortlist_boost": 0.0
       }
     ],
-    "mmr_selections": [{"rank": 1, "company": "Charité Berlin", "industry": "Hospitals and Health Care"}],
-    "timings": [{"stage": "decompose", "elapsed_ms": 430}, {"stage": "retrieve", "elapsed_ms": 120}]
+    "timings": [
+      {"stage": "decompose",  "elapsed_ms": 1518.4},
+      {"stage": "retrieve",   "elapsed_ms":  183.3},
+      {"stage": "rerank",     "elapsed_ms": 44473.6},
+      {"stage": "mmr",        "elapsed_ms":    0.3},
+      {"stage": "explain",    "elapsed_ms": 2748.1}
+    ]
   }
 }
 ```
+
+The `function_match` zero on the top result is the failure mode discussed in
+[DESIGN.md §10.3](./DESIGN.md#103-failure-analysis--senior-healthcare-strategist-in-germany-under-us-base-rate-contamination):
+the corpus has no candidates whose job titles literally include "strategist", so
+the substring matcher returns 0 and the ranking falls back to industry + seniority.
 
 ## Running the eval harness
 

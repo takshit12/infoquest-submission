@@ -37,7 +37,7 @@ class BM25Retriever:
         if not path.exists():
             return
         with path.open("rb") as f:
-            payload = pickle.load(f)
+            payload = pickle.load(f)  # nosec B301 - operator-controlled BM25_INDEX_PATH, built locally
         self._ids = payload["ids"]
         self._bm25 = payload["bm25"]
 

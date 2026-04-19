@@ -17,9 +17,11 @@ from app.core.deps import (
     SparseRetrieverDep,
     VectorStoreDep,
 )
+from app.core.logging import get_logger
 from app.models.api import ChatRequest, ChatResponse
 
 
+_log = get_logger("infoquest.api.chat")
 router = APIRouter(tags=["chat"])
 
 
@@ -38,7 +40,8 @@ def chat(
     try:
         from app.services import search_pipeline  # noqa: F401
     except ImportError as e:  # pragma: no cover
-        raise HTTPException(status_code=501, detail=f"chat not available: {e}")
+        _log.error("chat_service_unavailable", error=str(e))
+        raise HTTPException(status_code=503, detail="search service unavailable")
 
     return search_pipeline.run_chat(
         req=req,

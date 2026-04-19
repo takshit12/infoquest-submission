@@ -8,9 +8,11 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.core.deps import EmbedderDep, SparseRetrieverDep, VectorStoreDep
+from app.core.logging import get_logger
 from app.models.api import IngestRequest, IngestResponse
 
 
+_log = get_logger("infoquest.api.ingest")
 router = APIRouter(tags=["ingest"])
 
 
@@ -26,7 +28,8 @@ def ingest(
     try:
         from app.services.ingestion import run_ingest
     except ImportError as e:  # pragma: no cover
-        raise HTTPException(status_code=501, detail=f"ingest not available: {e}")
+        _log.error("ingest_service_unavailable", error=str(e))
+        raise HTTPException(status_code=503, detail="search service unavailable")
     return run_ingest(
         embedder=embedder,
         vector_store=vs,

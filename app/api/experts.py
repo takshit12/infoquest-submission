@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.logging import get_logger
 from app.models.api import ExpertDetail, ExpertListResponse
 
 
+_log = get_logger("infoquest.api.experts")
 router = APIRouter(tags=["experts"])
 
 
@@ -23,7 +25,8 @@ def list_experts(
     try:
         from app.services import experts_service
     except ImportError as e:  # pragma: no cover
-        raise HTTPException(status_code=501, detail=f"experts not available: {e}")
+        _log.error("experts_service_unavailable", error=str(e))
+        raise HTTPException(status_code=503, detail="search service unavailable")
     return experts_service.list_experts(
         offset=offset,
         limit=limit,
@@ -38,7 +41,8 @@ def get_expert(candidate_id: str) -> ExpertDetail:
     try:
         from app.services import experts_service
     except ImportError as e:  # pragma: no cover
-        raise HTTPException(status_code=501, detail=f"experts not available: {e}")
+        _log.error("experts_service_unavailable", error=str(e))
+        raise HTTPException(status_code=503, detail="search service unavailable")
     result = experts_service.get_expert(candidate_id)
     if result is None:
         raise HTTPException(status_code=404, detail="expert not found")

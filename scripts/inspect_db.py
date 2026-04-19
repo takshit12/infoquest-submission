@@ -50,7 +50,7 @@ def main():
     for t in tables:
         qualified = f'"{t["table_schema"]}"."{t["table_name"]}"'
         try:
-            cur.execute(f"SELECT COUNT(*) AS n FROM {qualified}")
+            cur.execute(f"SELECT COUNT(*) AS n FROM {qualified}")  # nosec B608 - identifier from pg_catalog query above, not user input
             n = cur.fetchone()["n"]
         except Exception as e:
             n = f"err: {e}"

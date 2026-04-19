@@ -11,8 +11,12 @@ from typing import Any
 
 import psycopg2.extras
 
+from app.core.logging import get_logger
 from app.db import source_conn
 from app.models.api import ExpertDetail, ExpertListItem, ExpertListResponse
+
+
+_log = get_logger("infoquest.experts_service")
 
 
 def list_experts(
@@ -206,7 +210,12 @@ def get_expert(candidate_id: str) -> ExpertDetail | None:
     """Prefer profile_builder; fall back to minimal DB stub on NotImplementedError."""
     try:
         from app.services import profile_builder  # lazy import
-    except Exception:  # pragma: no cover
+    except Exception as e:  # pragma: no cover
+        _log.warning(
+            "profile_builder_import_failed",
+            candidate_id=candidate_id,
+            error=str(e),
+        )
         profile_builder = None  # type: ignore
 
     if profile_builder is not None:
@@ -217,11 +226,20 @@ def get_expert(candidate_id: str) -> ExpertDetail | None:
             return _profile_to_detail(profile)
         except NotImplementedError:
             pass
-        except Exception:
+        except Exception as e:
             # Defensive: fall through to stub
-            pass
+            _log.warning(
+                "profile_builder_fetch_failed",
+                candidate_id=candidate_id,
+                error=str(e),
+            )
 
     try:
         return _stub_detail_from_db(candidate_id)
-    except Exception:
+    except Exception as e:
+        _log.warning(
+            "expert_stub_lookup_failed",
+            candidate_id=candidate_id,
+            error=str(e),
+        )
         return None

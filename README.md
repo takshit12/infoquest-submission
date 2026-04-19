@@ -20,6 +20,8 @@ python3.11 -m venv .venv
 # 2. configure env
 cp .env.example .env
 # ... edit .env with OPENROUTER_API_KEY and DATABASE_URL ...
+# Note: .env.example ships placeholder DB credentials for security —
+# fill DATABASE_URL with the real DSN from the assessment brief.
 
 # 3. run the server
 .venv/bin/uvicorn app.main:app --reload --port 8000

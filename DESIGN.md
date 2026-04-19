@@ -524,6 +524,14 @@ money per noise item*. Recall only matters as a bound — "did retrieval keep
 the gem alive long enough to be reranked?" — hence the diagnostic role of
 Recall@50. Below that bound, everything is precision.
 
+**Live-eval methodology note.** The `scripts/eval.py` harness uses
+**predicate-based grading** against the hand-labeled `golden_queries.json`
+fixture (each query has `must` / `should` clauses on candidate metadata)
+because the source corpus is synthetic and real engagement-outcome labels
+don't exist for this dataset. The schema in §10.1 is what a production
+deployment would adopt the moment historical engagements are available; the
+predicate harness is the dev-time stand-in.
+
 ### 10.3 Failure analysis — "Senior healthcare strategist in Germany" under US base-rate contamination
 
 - **Query.** `"Senior healthcare strategist in Germany"`.

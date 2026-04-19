@@ -55,14 +55,29 @@ DESIGN.md         Architecture deep-dive and Part 3 evaluation write-up
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/health` | Liveness + dependency probes |
+| `GET`  | `/live` | Process-up liveness (no dep pings) |
+| `GET`  | `/ready` | Readiness — pings Postgres / Chroma / sessions / LLM |
+| `GET`  | `/health` | Alias of `/ready` (back-compat) |
 | `POST` | `/ingest` | Build / rebuild the vector store from the source Postgres |
 | `POST` | `/chat` | Natural-language expert search (supports `?debug=true`) |
 | `GET`  | `/experts` | Paginated browse with filters |
 | `GET`  | `/experts/{id}` | Full candidate profile |
-| `GET`  | `/conversations/{id}` | Inspect a conversation's turn history |
+| `GET`  | `/conversations/{id}` | Inspect a conversation's turn history (requires `X-Session-Token`) |
 
 Interactive docs at `http://localhost:8000/docs`.
+
+### Security & rate limiting
+
+The server ships with production-minded defaults even though it runs locally:
+
+- **API key (optional).** Set `API_KEY` in `.env` to require `X-API-Key: <value>` on every protected route. `/`, `/live`, `/ready`, `/health`, `/docs`, `/openapi.json`, `/redoc` are always exempt.
+- **Per-conversation bearer.** First `/chat` response returns `session_token`; echo it as `X-Session-Token` on follow-up `/chat` calls and on `GET /conversations/{id}`. Closes the IDOR on conversation history.
+- **Rate limit.** 60 requests / minute / client IP via `slowapi`, tunable with `RATE_LIMIT_PER_MIN`.
+- **CORS.** Off unless `CORS_ALLOW_ORIGINS` is populated (comma-separated).
+- **Security headers.** HSTS, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `X-Request-ID` on every response.
+- **Body cap.** Requests over `MAX_BODY_SIZE_BYTES` (default 1 MB) → 413.
+
+Request-id is bound into every log line (structlog contextvars), so a single `X-Request-ID` header threads through decomposer / retriever / explainer logs.
 
 ## Stack at a glance
 
@@ -72,6 +87,8 @@ Interactive docs at `http://localhost:8000/docs`.
 - **rank_bm25** — sparse lexical retrieval, fused with dense via **Reciprocal Rank Fusion**
 - **OpenRouter → `anthropic/claude-haiku-4.5`** — query decomposition + match explanations
 - **SQLite** — conversation / session state
+
+> **No Docker required.** Chroma is embedded; BM25, session store, and embedder all run in-process. `pip install -r requirements.txt` + `uvicorn` is the entire setup.
 
 ## Model choices (one-line rationale each)
 
@@ -177,23 +194,32 @@ curl -X POST localhost:8000/chat \
 }
 ```
 
-### 4. Chat — conversation refinement (reuse conversation_id)
+### 4. Chat — conversation refinement (reuse conversation_id + session token)
+
+The first `/chat` response returns a `session_token` (32-byte URL-safe). Echo
+it as the `X-Session-Token` header on every follow-up turn that reuses the
+conversation, and on `GET /conversations/{id}`. Without it the server returns
+**401 missing X-Session-Token**; with the wrong value it returns **403 invalid
+session token**. The conversation_id alone is *not* sufficient — this closes
+the IDOR where any UUID-holder could read someone else's history.
 
 ```bash
-# Second turn uses the conversation_id returned by the first.
+# Replace <CONV_ID> and <SESSION_TOKEN> with values from the first response.
 curl -X POST localhost:8000/chat \
      -H 'content-type: application/json' \
+     -H 'X-Session-Token: <SESSION_TOKEN>' \
      -d '{
-           "conversation_id": "9c8a8f7b-2d12-4a0f-8e3a-f12345abcdef",
-           "query": "Among those, prioritise Saudi Arabia and senior levels only."
+           "conversation_id": "<CONV_ID>",
+           "query": "Filter those to only people based in Saudi Arabia."
          }'
 ```
 
-Response shape is identical to the above. Internally the refinement turn
-**re-runs retrieval globally** (hard filters now include `country=SA` and
-`seniority>=senior`), then applies a `+0.05` prior boost to candidates that
-were in the previous shortlist — so it never caps to the prior 10 and can
-surface better matches that the first turn missed.
+Response shape is identical to the above (no `session_token` echoed back —
+it's only returned on the first turn to keep the secret out of repeated
+payloads). Internally the refinement turn **re-runs retrieval globally**
+(hard filters now include `country=SA`), then applies a `+0.05` prior boost
+to candidates that were in the previous shortlist — so it never caps to the
+prior 10 and can surface better matches that the first turn missed.
 
 ### 5. Chat — with pipeline debug info
 

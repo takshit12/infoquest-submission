@@ -30,6 +30,9 @@ python-dateutil==2.9.0
 # ---- logging ----
 structlog==24.4.0
 
+# ---- rate limiting ----
+slowapi==0.1.9
+
 # ---- testing ----
 pytest==8.3.3
 pytest-asyncio==0.24.0

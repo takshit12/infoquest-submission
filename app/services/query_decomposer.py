@@ -14,7 +14,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from app.models.domain import QueryIntent
+from app.models.domain import CareerTrajectory, QueryIntent
 from app.ports.llm import LLMClient
 from app.taxonomies import industry_aliases
 from app.taxonomies.regions import REGION_ALIASES, REGIONS, resolve_region
@@ -102,6 +102,33 @@ def _detect_require_current(query: str) -> bool | None:
         return True
     if re.search(r"\bcurrent\s+[a-z]+", q):
         return True
+    return None
+
+
+# Order matters: more specific phrases (transitioning / ascending) must be
+# checked before "current" / "former" so a sentence like "rising senior data
+# scientist currently at Stripe" classifies as ascending, not current.
+_TRAJECTORY_PATTERNS: list[tuple[re.Pattern[str], CareerTrajectory]] = [
+    (
+        re.compile(
+            r"\b(transition(?:ing)?|pivot(?:ing)?|mov(?:ing|ed)\s+(?:to|into)|switching\s+to)\b",
+            re.I,
+        ),
+        "transitioning",
+    ),
+    (
+        re.compile(r"\b(rising|up-and-coming|ascending|emerging|fast-track)\b", re.I),
+        "ascending",
+    ),
+    (re.compile(r"\b(former|ex-|previously|past)\b", re.I), "former"),
+    (re.compile(r"\bcurrent(?:ly)?\b|\bnow\b|\bpresent\b", re.I), "current"),
+]
+
+
+def _detect_trajectory(query: str) -> CareerTrajectory | None:
+    for pat, label in _TRAJECTORY_PATTERNS:
+        if pat.search(query):
+            return label
     return None
 
 
@@ -204,6 +231,13 @@ def regex_fallback(query: str) -> QueryIntent:
     geos = _detect_geographies(query)
     seniority = _detect_seniority(query)
     require_current = _detect_require_current(query)
+    trajectory = _detect_trajectory(query)
+    # Keep require_current consistent with trajectory when the latter is
+    # current/former — preserves existing hard-filter behavior in the retriever.
+    if trajectory == "current" and require_current is None:
+        require_current = True
+    elif trajectory == "former" and require_current is None:
+        require_current = False
     min_yoe = _detect_min_yoe(query)
     function = _detect_function(query)
     keywords = _extract_keywords(query)
@@ -220,6 +254,7 @@ def regex_fallback(query: str) -> QueryIntent:
         industries=industries,
         seniority_band=seniority,  # type: ignore[arg-type]
         skill_categories=[],
+        career_trajectory=trajectory,
         decomposer_source="regex_fallback",
     )
 
@@ -261,6 +296,9 @@ def _merge(llm_intent: QueryIntent, regex_intent: QueryIntent) -> QueryIntent:
         seniority_band=llm_intent.seniority_band or regex_intent.seniority_band,
         skill_categories=union_list(
             llm_intent.skill_categories, regex_intent.skill_categories
+        ),
+        career_trajectory=(
+            llm_intent.career_trajectory or regex_intent.career_trajectory
         ),
         decomposer_source="merged",
         warnings=list(llm_intent.warnings) + list(regex_intent.warnings),

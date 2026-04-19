@@ -15,13 +15,17 @@ class SignalWeights(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="WEIGHT_", env_file=".env", extra="ignore")
 
+    # Sum = 1.00. Trajectory takes from the residual / semantic signals
+    # (bm25 -0.02, recency -0.02, dense -0.01) since trajectory carries
+    # query-supplied intent that those semantic signals can't see.
     industry: float = 0.25
     function: float = 0.20
     seniority: float = 0.20
     skill_category: float = 0.10
-    recency: float = 0.10
-    dense: float = 0.10
-    bm25: float = 0.05
+    recency: float = 0.08
+    dense: float = 0.09
+    bm25: float = 0.03
+    trajectory: float = 0.05
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -32,6 +36,7 @@ class SignalWeights(BaseSettings):
             "recency_decay": self.recency,
             "dense_cosine": self.dense,
             "bm25_score": self.bm25,
+            "trajectory_match": self.trajectory,
         }
 
 

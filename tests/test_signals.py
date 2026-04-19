@@ -201,3 +201,66 @@ def test_bm25_passthrough_clamped():
     r = _sr(_role(), sparse=0.42)
     it = _intent()
     assert abs(signals.bm25_score(r, it) - 0.42) < 1e-9
+
+
+# ------------------ trajectory_match ------------------
+
+
+def test_trajectory_match_neutral_when_unspecified():
+    r = _sr(_role(is_current=True))
+    it = _intent(career_trajectory=None)
+    assert signals.trajectory_match(r, it) == 0.5
+
+
+def test_trajectory_match_current_rewards_current_role():
+    r_cur = _sr(_role(is_current=True))
+    r_old = _sr(_role(is_current=False, end_date=date(2019, 1, 1)))
+    it = _intent(career_trajectory="current")
+    assert signals.trajectory_match(r_cur, it) == 1.0
+    assert signals.trajectory_match(r_old, it) == 0.0
+
+
+def test_trajectory_match_former_rewards_historical_role():
+    r_old = _sr(_role(is_current=False, end_date=date(2019, 1, 1)))
+    r_cur = _sr(_role(is_current=True))
+    it = _intent(career_trajectory="former")
+    assert signals.trajectory_match(r_old, it) == 1.0
+    # current role under "former" intent: weak penalty (0.2), not zero —
+    # the hard `require_current=False` filter should have removed it; if it
+    # leaked through we want a soft demotion, not a kill.
+    assert signals.trajectory_match(r_cur, it) == 0.2
+
+
+def test_trajectory_match_ascending_sweet_spot():
+    # 5–12 YoE in senior+ tier → 1.0
+    sweet = _sr(_role(seniority_tier="senior", candidate_yoe=8))
+    # too early (< 5 YoE) → 0.3
+    early = _sr(_role(seniority_tier="senior", candidate_yoe=2))
+    # too late (> 15 YoE) → 0.3
+    late = _sr(_role(seniority_tier="vp", candidate_yoe=22))
+    # in 5-15 YoE band but wrong tier → 0.6
+    mid_tier = _sr(_role(seniority_tier="mid", candidate_yoe=10))
+    it = _intent(career_trajectory="ascending")
+    assert signals.trajectory_match(sweet, it) == 1.0
+    assert signals.trajectory_match(early, it) == 0.3
+    assert signals.trajectory_match(late, it) == 0.3
+    assert signals.trajectory_match(mid_tier, it) == 0.6
+
+
+def test_trajectory_match_transitioning_returns_neutral():
+    # Single-role view can't detect a transition — see DESIGN §11.
+    r = _sr(_role())
+    it = _intent(career_trajectory="transitioning")
+    assert signals.trajectory_match(r, it) == 0.5
+
+
+# ------------------ SIGNALS registry sanity ------------------
+
+
+def test_signals_registry_contains_all_eight():
+    expected = {
+        "industry_match", "function_match", "seniority_match",
+        "skill_category_match", "recency_decay", "dense_cosine",
+        "bm25_score", "trajectory_match",
+    }
+    assert set(signals.SIGNALS.keys()) == expected

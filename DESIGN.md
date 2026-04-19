@@ -212,7 +212,7 @@ soft.
 
 ## 5. Ranking
 
-### 5.1 The 7 weighted signals
+### 5.1 The 8 weighted signals
 
 All weights are **config constants in `app/core/config.py`** (`WEIGHT_*` env
 vars override at runtime), not LLM-emitted. The LLM says *which* signals
@@ -224,9 +224,10 @@ apply; magnitudes are tuned once against the golden queries.
 | `function_match`        | 0.20 | **1.0** if `intent.function` appears as a substring of `job_title + description + candidate_headline`; **0.5** if any ≥4-char token of a multi-word function matches; **0.0** otherwise | **0.5** when `intent.function` is `None` |
 | `seniority_match`       | 0.20 | Bucket by `band_distance(role.seniority_tier, intent.seniority_band)`: {0→1.0, 1→0.7, 2→0.4, ≥3→0.1}. For `senior/director/vp/head/cxo` bands, multiplied by `max(0.6, min(1.0, candidate_yoe/15))` | **0.5** when `intent.seniority_band` is `None` |
 | `skill_category_match`  | 0.10 | **Jaccard**: `|intent.categories ∩ role.categories| / |intent.categories ∪ role.categories|` | **0.5** when `intent.skill_categories` empty |
-| `recency_decay`         | 0.10 | **1.0** if `is_current` or `end_date` is None; else `exp(-years_since_end / 10)` | always applies |
-| `dense_cosine`          | 0.10 | `1 - cosine_distance(BGE(query), BGE(role_doc))`, clamped to [0, 1] | always applies |
-| `bm25_score`            | 0.05 | raw BM25, batch-normalised so `max == 1.0` | always applies |
+| `recency_decay`         | 0.08 | **1.0** if `is_current` or `end_date` is None; else `exp(-years_since_end / 10)` | always applies |
+| `dense_cosine`          | 0.09 | `1 - cosine_distance(BGE(query), BGE(role_doc))`, clamped to [0, 1] | always applies |
+| `bm25_score`            | 0.03 | raw BM25, batch-normalised so `max == 1.0` | always applies |
+| `trajectory_match`      | 0.05 | Per-role view of `intent.career_trajectory`: `current` → `1.0` if `is_current` else `0.0`; `former` → mirror; `ascending` → `1.0` if 5–12 YoE in senior+, `0.6` otherwise within 5–15 YoE, else `0.3`; `transitioning` → `0.5` (single-role view can't detect a transition; see §11) | **0.5** when `intent.career_trajectory` is `None` |
 
 Sum of weights = 1.0 → `relevance_score` is in [0, 1].
 
@@ -237,6 +238,7 @@ Sum of weights = 1.0 → `relevance_score` is in [0, 1].
 - **Substring `function_match` (not BGE cosine).** Function names in this domain are strict phrases — "regulatory affairs", "product management", "due diligence". BGE cosine would collapse "regulatory affairs" against "regulation enforcement" or "product design", producing false positives on a corpus where descriptions are templated. Partial-token matching (0.5 for one significant word of a multi-word function) is the sharper sieve. Would reintroduce cross-encoder rerank if we moved to free-text function queries.
 - **Jaccard on skill categories (not recall).** Recall `|inter|/|intent|` would give 1.0 to a role with a single matching category out of five requested — a degenerate top-scorer. Jaccard keeps the denominator honest: a role must have *proportional* overlap to score well.
 - **Recency τ=10 (not τ=5).** Expert networks value long-tenure hits even for roles that ended 5 years ago (a 2019 pharma Director is still a pharma Director). τ=5 scores that role at 0.37; τ=10 at 0.61 — closer to product reality. Easy to tune per-vertical if needed.
+- **Trajectory as a soft signal *and* a hard filter.** The brief lists trajectory as a structured signal alongside function/seniority/geography/industry. We extract `career_trajectory ∈ {current, former, transitioning, ascending}` from the query. For `current`/`former`, the binary `require_current` ALSO applies as a hard prefilter (precision-first), so trajectory's job within the filtered set is to break ties — e.g., for `former`, prefer roles that ended longer ago over near-current historicals. For `ascending`, the signal scores the YoE/seniority sweet spot (5–12 YoE in senior+). For `transitioning`, the per-role view returns neutral (0.5); see the caveat in §11.
 
 **Effective query-conditionality of the signal *contributions*.** Although the weight magnitudes are fixed, the *active* signals vary with the query: when an intent says nothing about, say, industry or skill categories, those signals return the neutral **0.5** baseline and contribute only a flat half-weight — they don't discriminate. When the intent *does* specify, the signal bounces between 0 and 1 and discriminates fully. So "Former CPO at a Saudi petrochemical company" exercises industry + seniority + function at full discrimination (geography is a hard filter, not a signal), while "junior data engineers anywhere" neutralises industry/geography and lets function + seniority + semantic signals dominate. Fixed weights + intent-gated activation ≠ bureaucratic "one-size-fits-all" ranking.
 
@@ -604,6 +606,14 @@ predicate harness is the dev-time stand-in.
   from scope.
 - **No eval on real engagements.** Only the predicate-based golden set. The
   framework (sec. 10.1) is ready to ingest real engagements when available.
+- **`trajectory_match` for "transitioning" returns neutral (0.5).**
+  Detecting a transition needs multi-role inspection (e.g., a candidate who
+  was a CFO in 2018 and is a VC partner now). The reranker currently sees
+  one role at a time; threading the full role history through the scorer
+  would touch `ScoredRole` / `reranker.rerank()` and was deferred. The
+  `career_trajectory: "transitioning"` value is still extracted from the
+  query and visible in `?debug=true` so a future multi-role signal can
+  consume it without re-extracting.
 
 ---
 

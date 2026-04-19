@@ -1,4 +1,4 @@
-"""The 7 ranking signals as pure functions + the SIGNALS registry.
+"""The 8 ranking signals as pure functions + the SIGNALS registry.
 
 Filled in by the feat/search worktree. Each signal returns a float in [0, 1].
 Weights come from `app.core.config.SignalWeights` — the LLM does NOT choose
@@ -12,6 +12,8 @@ Expected signals:
   - recency_decay       : exp decay on (today - end_date_or_today)
   - dense_cosine        : pass-through of ScoredRole.dense_score
   - bm25_score          : pass-through of normalized ScoredRole.sparse_score
+  - trajectory_match    : per-role view of intent.career_trajectory
+                          (current/former/transitioning/ascending)
 
 Registry shape:
     SIGNALS: dict[str, SignalFn] = { "industry_match": industry_match_fn, ... }
@@ -142,6 +144,41 @@ def bm25_score(role: ScoredRole, intent: QueryIntent) -> float:
     return max(0.0, min(1.0, float(role.sparse_score)))
 
 
+def trajectory_match(role: ScoredRole, intent: QueryIntent) -> float:
+    """Per-role view of the intent's career trajectory.
+
+    Limitation: a single-role view can't truly detect "transitioning" (that
+    needs multi-role inspection). For transitioning queries we return neutral
+    so the signal contributes a flat half-weight without distorting ranking.
+    For current/former we mirror the binary `is_current`. For ascending we
+    reward the 5–12 YoE / senior-tier sweet spot.
+    """
+    if intent.career_trajectory is None:
+        return 0.5  # neutral: signal not exercised by this query
+
+    r = role.role
+    if intent.career_trajectory == "current":
+        return 1.0 if r.is_current else 0.0
+    if intent.career_trajectory == "former":
+        # Even with `require_current=False` as a hard filter we still score
+        # to differentiate within the historical-role set; treat any current
+        # leak (filter bypass) as a soft penalty rather than zero.
+        return 1.0 if not r.is_current else 0.2
+    if intent.career_trajectory == "ascending":
+        yoe = max(0, int(r.candidate_yoe or 0))
+        tier = r.seniority_tier
+        if 5 <= yoe <= 12 and tier in {"senior", "director", "vp", "head"}:
+            return 1.0
+        if yoe < 5 or yoe > 15:
+            return 0.3  # too early or too late to be "ascending"
+        return 0.6
+    if intent.career_trajectory == "transitioning":
+        # Single-role inspection can't see a transition; neutral is honest.
+        # See DESIGN §11 known-limitations note.
+        return 0.5
+    return 0.5
+
+
 SIGNALS: dict[str, SignalFn] = {
     "industry_match": industry_match,
     "function_match": function_match,
@@ -150,4 +187,5 @@ SIGNALS: dict[str, SignalFn] = {
     "recency_decay": recency_decay,
     "dense_cosine": dense_cosine,
     "bm25_score": bm25_score,
+    "trajectory_match": trajectory_match,
 }

@@ -49,6 +49,43 @@ def test_regex_fallback_currently():
     assert i.require_current is True
 
 
+# ------------------------------------------------------------------
+# regex_fallback — career trajectory extraction
+# ------------------------------------------------------------------
+
+
+def test_regex_fallback_trajectory_former_also_sets_require_current():
+    i = query_decomposer.regex_fallback("former CPO at a petrochemical company")
+    assert i.career_trajectory == "former"
+    assert i.require_current is False  # consistency with hard filter
+
+
+def test_regex_fallback_trajectory_current_also_sets_require_current():
+    i = query_decomposer.regex_fallback("currently a regulatory affairs lead")
+    assert i.career_trajectory == "current"
+    assert i.require_current is True
+
+
+def test_regex_fallback_trajectory_ascending_does_not_set_require_current():
+    i = query_decomposer.regex_fallback("rising senior data scientist anywhere")
+    assert i.career_trajectory == "ascending"
+    # ascending is a soft preference; must not lock the hard filter
+    assert i.require_current is None
+
+
+def test_regex_fallback_trajectory_transitioning():
+    i = query_decomposer.regex_fallback(
+        "product manager transitioning into developer relations"
+    )
+    assert i.career_trajectory == "transitioning"
+    assert i.require_current is None
+
+
+def test_regex_fallback_trajectory_none_when_unmarked():
+    i = query_decomposer.regex_fallback("VP of engineering at SaaS companies")
+    assert i.career_trajectory is None
+
+
 def test_regex_fallback_industry_alias_pharma():
     i = query_decomposer.regex_fallback("pharma regulatory leader")
     assert "Pharmaceuticals" in i.industries

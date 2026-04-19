@@ -17,6 +17,17 @@ SeniorityTier = Literal[
 ]
 
 
+# Richer trajectory than the binary `require_current`. Captures the career
+# arc the user implied:
+#   - "current" / unmarked-but-active → present-tense focus
+#   - "former" / "ex-" / "previously" → historical-role focus (also a hard filter)
+#   - "transitioning" / "moving into" → mid-pivot; per-role inspection can't
+#     score this richly (single-role view), so the signal returns neutral and
+#     the value is captured for downstream/multi-role uses (see DESIGN §11)
+#   - "ascending" / "rising" / "up-and-coming" → 5–12 YoE in senior+ tiers
+CareerTrajectory = Literal["current", "former", "transitioning", "ascending"]
+
+
 class RoleRecord(BaseModel):
     """One row of work_experience, denormalized with candidate + company fields.
 
@@ -124,6 +135,10 @@ class QueryIntent(BaseModel):
         Literal["junior", "mid", "senior", "director", "vp", "head", "cxo"] | None
     ) = None
     skill_categories: list[str] = Field(default_factory=list)
+    # Career arc the query implies. Strictly richer than `require_current`:
+    # {current, former} are derivable from the binary, but {transitioning,
+    # ascending} are not. The reranker uses this via `trajectory_match`.
+    career_trajectory: CareerTrajectory | None = None
 
     # ---- meta ----
     decomposer_source: Literal["llm", "regex_fallback", "merged"] = "llm"

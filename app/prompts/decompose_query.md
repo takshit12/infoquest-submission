@@ -20,14 +20,17 @@ presence/absence of signals and constraints.
   "function": "short function label or null, e.g. 'regulatory affairs'",
   "industries": ["canonical names, e.g. 'Pharmaceuticals'"],
   "seniority_band": "junior|mid|senior|director|vp|head|cxo" or null,
-  "skill_categories": ["optional, e.g. 'Data Science'"]
+  "skill_categories": ["optional, e.g. 'Data Science'"],
+  "career_trajectory": "current|former|transitioning|ascending" or null
 }
 ```
 
 ## Rules
 - Geographies: expand regions to their countries. "Middle East" → `["SA","AE","QA","EG","OM","PS","JO","LB","KW","BH"]`. "EMEA" → Europe+MENA.
-- "Current X" / "currently at Y" / "sitting X" → `require_current: true`.
-- "Former X" / "past X" / "ex-X" → `require_current: false`.
+- "Current X" / "currently at Y" / "sitting X" → `require_current: true` AND `career_trajectory: "current"`.
+- "Former X" / "past X" / "ex-X" → `require_current: false` AND `career_trajectory: "former"`.
+- "Transitioning to X" / "moving into X" / "pivoting" → `career_trajectory: "transitioning"` (leave `require_current: null`).
+- "Rising X" / "up-and-coming" / "ascending" / "emerging X" → `career_trajectory: "ascending"` (leave `require_current: null`).
 - "Senior" / "experienced" alone without a band → `seniority_band: "senior"`.
 - "VP-level", "Head of", "Director of" → the matching band.
 - Do not invent candidate IDs. Leave `exclude_candidate_ids` empty unless the user explicitly refers to IDs.
@@ -51,7 +54,8 @@ Output:
   "function": "regulatory affairs",
   "industries": ["Pharmaceuticals"],
   "seniority_band": null,
-  "skill_categories": []
+  "skill_categories": [],
+  "career_trajectory": null
 }
 ```
 
@@ -69,7 +73,8 @@ Output:
   "function": "product",
   "industries": ["Oil & Gas"],
   "seniority_band": "cxo",
-  "skill_categories": []
+  "skill_categories": [],
+  "career_trajectory": "former"
 }
 ```
 
@@ -87,6 +92,45 @@ Output:
   "function": "data engineering",
   "industries": [],
   "seniority_band": "junior",
-  "skill_categories": ["Engineering", "Data"]
+  "skill_categories": ["Engineering", "Data"],
+  "career_trajectory": null
+}
+```
+
+User query: "rising data scientist transitioning into AI safety research"
+
+Output:
+```json
+{
+  "rewritten_search": "ascending data scientist moving into AI safety research",
+  "keywords": ["data scientist", "AI safety", "alignment"],
+  "geographies": [],
+  "require_current": null,
+  "min_yoe": null,
+  "exclude_candidate_ids": [],
+  "function": "data engineering",
+  "industries": [],
+  "seniority_band": null,
+  "skill_categories": ["Data Science"],
+  "career_trajectory": "transitioning"
+}
+```
+
+User query: "up-and-coming product managers, 5–10 years in"
+
+Output:
+```json
+{
+  "rewritten_search": "ascending product manager with mid-career experience",
+  "keywords": ["product manager", "PM"],
+  "geographies": [],
+  "require_current": null,
+  "min_yoe": 5,
+  "exclude_candidate_ids": [],
+  "function": "product management",
+  "industries": [],
+  "seniority_band": "senior",
+  "skill_categories": [],
+  "career_trajectory": "ascending"
 }
 ```

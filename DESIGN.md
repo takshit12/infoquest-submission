@@ -584,6 +584,76 @@ predicate harness is the dev-time stand-in.
   collision on `head`") are worth mentioning in Known Limitations but don't
   exercise the same depth of ranking theory.
 
+### 10.4 Live smoke-run snapshot (2026-04-19)
+
+Runnable artifact at `scripts/smoke.py`. Distinct from the predicate-graded
+eval in §10.2 — the smoke is the operational health check: 20 diverse
+queries (one per signal axis + one per `career_trajectory` enum state +
+the §10.3 failure-mode demo) against the full 24,635-role corpus on the
+dev Postgres + local Chroma + OpenRouter (`anthropic/claude-haiku-4.5`).
+
+| Aggregate | Value |
+|---|---|
+| Queries × top_k | 20 × 5 = **100 ranked results** |
+| Status 200 | **20 / 20** |
+| Empty responses | **0 / 20** |
+| Latency avg / p50 / p95 | **51.4s / 50.3s / 57.9s** per query |
+| Wall time | 17 min 9 s |
+| Server-side errors / rate-limit hits | 0 / 0 |
+| `career_trajectory` enum states observed | **all four** (`current`, `former`, `transitioning`, `ascending`) |
+
+**What this proves.** (a) Every endpoint touched (`/chat?debug=true`) holds
+under repeated diverse load; (b) the new `trajectory_match` signal isn't a
+schema-only addition — every enum value is actually emitted by the
+decomposer on at least one query in the suite; (c) the rankings are
+sensible-but-honest — the explainer admits weak fit when the synthetic
+corpus has no good match (the brief's regulatory-affairs/pharma/Middle-East
+query top-1 explanation literally says *"does not match"*, exactly the kind
+of grounded-LLM behavior §6.3 argues for).
+
+**Notable top-1 hits showing the signal mix at work:**
+
+| Query | Top-1 | Score | Why |
+|---|---|---|---|
+| VP of engineering at SaaS, 10+y | Valentina Nilsson — VP Engineering @ Crexi (ES) | 0.872 | exact function + seniority; current role at a SaaS platform |
+| ML engineers in banking | Elena Gupta — Staff ML @ Barclays Investment Bank (IN) | 0.794 | exact function (`Machine Learning Engineer`) + industry (`Banking`/Investment Banking) |
+| DevOps + K8s/AWS | Lucas Kim (US) | 0.722 | function + tooling keywords lift dense+bm25 |
+| Big Four in London | Noura Becker (**GB**) | 0.640 | geography hard filter prunes globally before scoring |
+| Senior healthcare strategist in Germany (§10.3 demo) | Leila Al-Rashid (**DE**) | 0.660 | hard `country=DE` filter eliminates the US base-rate contamination — the problem §10.3 was written for |
+| Brief example (regulatory affairs / pharma / ME) | Diana Al-Rashid (SY); explanation = *"does not match"* | 0.538 | synthetic corpus has no real regulatory-affairs/pharma overlap in MENA — the LLM is honest about the weak signal mix instead of cargo-culting a high score |
+
+**Latency decomposition (from the captured `?debug=true` `timings` block).**
+
+| Stage | Median elapsed | Why |
+|---|---|---|
+| `decompose` | ~1.5s | one OpenRouter round-trip; small JSON |
+| `retrieve` | ~0.2s | local Chroma + in-memory BM25 |
+| `rerank` | **~44s** | per-candidate `profile_builder.fetch_candidate_profile` is a sync Postgres round-trip to the **remote dev DB** at `34.79.32.228` (Google Cloud, ~250ms RTT from a local laptop × ~50 candidates × ~3 sub-queries each) |
+| `mmr` | <1ms | pure in-memory math on the top-K |
+| `explain` | ~2.7s | 5 OpenRouter calls **in parallel** via `ThreadPoolExecutor(max_workers=5)` |
+
+**Where the time isn't.** The LLM contribution is ~4s of ~50s — the
+common assumption that "AI apps are slow because of LLMs" is wrong here.
+Postgres round-trips dominate.
+
+**Concrete fixes if this needs to drop to <10s/query in production.**
+
+1. **Batch the per-candidate profile fetch.** `profile_builder` already
+   exposes `_fetch_roles(cur, candidate_ids)` etc. taking a list — the
+   reranker just needs to call those in 4 round-trips total (header / roles
+   / education / skills / languages with `WHERE id = ANY($1)`) instead of
+   ~50× per candidate. Estimated drop: 44s → ~3s.
+2. **Postgres connection pool.** `app/db.py:source_conn` opens a fresh
+   connection per request; reusing via `psycopg2.pool.ThreadedConnectionPool`
+   cuts ~150ms of TLS handshake from each round-trip even after fix #1.
+3. **Profile-row cache.** Candidates appear in many queries; an LRU keyed
+   on candidate_id with a few-minute TTL would hit ~70% on a busy
+   workload. Out of scope for the take-home submission.
+
+These are noted-not-done because the brief is precision-oriented and the
+take-home corpus is small enough that 50s is acceptable for the live demo.
+A production deploy would do (1) on day one.
+
 ---
 
 ## 11. Known limitations (be honest)

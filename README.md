@@ -345,3 +345,51 @@ Metrics reported per query and as macro averages:
 Grading is PREDICATE-based (source data is synthetic; exact candidate IDs
 are unknown). See `tests/fixtures/golden_queries.json` for the `must` /
 `should` clauses per query and `DESIGN.md` sec. 10 for the grading schema.
+
+## Live smoke run (operational health check)
+
+`scripts/smoke.py` runs 20 diverse queries (top_k=5 each → 100 ranked
+results) against a live server. Distinct from the predicate-based eval
+above: this exercises the full network path — OpenRouter LLM calls,
+Postgres, Chroma, BM25 — and verifies each `career_trajectory` enum state
+fires end-to-end.
+
+```bash
+.venv/bin/uvicorn app.main:app --port 8000   # in one shell
+.venv/bin/python scripts/smoke.py            # in another (~17 min)
+```
+
+**Most recent run — 2026-04-19, full 24,635-role corpus:**
+
+| | |
+|---|---|
+| Queries | **20 / 20 returned 200** |
+| Total ranked results | **100 / 100** (no empty responses) |
+| Latency | avg **51.4s** / p50 50.3s / p95 57.9s per query |
+| Wall time | 17 min 9 s |
+| `career_trajectory` states observed | **all four** — `current`, `former`, `transitioning`, `ascending` |
+| Server-side errors | 0 |
+
+Representative top-1 hits (full per-query breakdown in `/tmp/infoquest_smoke.csv` after a run):
+
+| # | Query | Top hit | Score |
+|---|---|---|---|
+|  2 | VP of engineering at SaaS, 10+y | Valentina Nilsson — VP Engineering @ Crexi (ES) | 0.872 |
+|  9 | Machine learning engineers in banking | Elena Gupta — Staff ML Engineer @ Barclays Investment Bank (IN) | 0.794 |
+| 14 | DevOps + Kubernetes + AWS | Lucas Kim (US) | 0.722 |
+| 15 | Director-level UX designers | Rana Santos (US) | 0.717 |
+| 16 | Senior consultants at Big Four in London | Noura Becker (**GB** — geo hard filter) | 0.640 |
+| 19 | Senior healthcare strategist in Germany | Leila Al-Rashid (**DE** — geo hard filter from §10.3 fix) | 0.660 |
+|  1 | Brief example (regulatory affairs / pharma / Middle East) | Diana Al-Rashid (SY); top-1 explanation literally says "does not match" — honest LLM grounding on weak signals on this synthetic dataset | 0.538 |
+
+The ~50s/query floor is **dominated by the rerank stage's profile fetches**
+(per the captured `?debug=true` timings: decompose ≈1.5s, retrieve ≈0.2s,
+**rerank ≈44s**, mmr <1ms, explain ≈2.7s parallel). The reranker assembles
+each candidate's full profile via `profile_builder.fetch_candidate_profile`,
+which is a synchronous Postgres round-trip per unique candidate to the
+remote dev DB at `34.79.32.228` (Google Cloud, geographically distant from
+a local laptop). Easy fixes if this matters in prod: a connection pool +
+batched `WHERE id = ANY($1)` query (cuts 50 round-trips to 1), or a
+profile-row cache keyed on candidate_id. **The LLM contribution is small
+(~4s)** because the explainer already parallelizes its 5 per-candidate
+calls via `ThreadPoolExecutor`.

@@ -253,6 +253,34 @@ class FakeSessionStore:
         return True
 
 
+
+class FakeWeightsRepo:
+    """Stub weights repo for unit tests."""
+
+    def __init__(self):
+        self.weights = {
+            "industry": 0.25,
+            "function": 0.20,
+            "seniority": 0.20,
+            "skill_category": 0.10,
+            "recency": 0.08,
+            "dense": 0.09,
+            "bm25": 0.03,
+            "trajectory": 0.05,
+        }
+
+    def fetch_signal_weights(self) -> dict[str, float]:
+        return dict(self.weights)
+
+    def update_signal_weights(self, **weights) -> bool:
+        self.weights = {k: v for k, v in weights.items() if k in self.weights}
+        return True
+
+
+@pytest.fixture
+def fake_weights_repo():
+    return FakeWeightsRepo()
+
 # ============================================================
 #                        Fixtures
 # ============================================================

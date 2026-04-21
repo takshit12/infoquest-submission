@@ -219,15 +219,21 @@ def run_chat(
 
     debug_payload: DebugPayload | None = None
     if debug:
-        weights_map = settings.weights.as_dict()
+        from app.services.weight_resolver import resolve_query_weights
+        base_map = settings.weights.as_dict()
+        # Re-derive the applied (per-query) weights so the debug payload can
+        # surface both base and applied side-by-side. resolve_query_weights is
+        # pure, so this is a cheap idempotent mirror of what rerank() did.
+        applied_map = resolve_query_weights(current_intent, base_map)
         breakdown: list[RankingBreakdown] = []
         for i, c in enumerate(head):
             sigs = [
                 SignalScore(
                     name=n,
                     raw=float(r),
-                    weight=float(weights_map.get(n, 0.0)),
-                    weighted=float(r) * float(weights_map.get(n, 0.0)),
+                    base_weight=float(base_map.get(n, 0.0)),
+                    applied_weight=float(applied_map.get(n, 0.0)),
+                    weighted=float(r) * float(applied_map.get(n, 0.0)),
                 )
                 for n, r in (c.signal_scores or {}).items()
             ]

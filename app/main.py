@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from app.api import admin as admin_router
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
@@ -38,20 +37,12 @@ async def lifespan(app: FastAPI):
     configure_logging(level=settings.log_level, fmt=settings.log_format)
     log = get_logger("infoquest.startup")
 
-    if settings.enable_dynamic_weights:
-        try:
-            from app.db import init_signal_weights_table
-            init_signal_weights_table()
-            log.info("lifespan.signal_weights_table.initialized")
-        except Exception as e:
-            log.warning("lifespan.signal_weights_init_failed", error=str(e))
     log.info(
         "starting",
         version=__version__,
         model=settings.openrouter_model,
         embedding_model=settings.embedding_model,
         chroma_dir=settings.chroma_dir,
-        enable_dynamic_weights=settings.enable_dynamic_weights,
     )
     yield
     log.info("shutdown")
@@ -106,7 +97,6 @@ app.include_router(ingest_router.router)
 app.include_router(chat_router.router)
 app.include_router(experts_router.router)
 app.include_router(conversations_router.router)
-app.include_router(admin_router.router)
 
 
 @app.get("/", include_in_schema=False)

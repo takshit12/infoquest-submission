@@ -7,8 +7,12 @@ from pydantic import BaseModel, Field
 class SignalScore(BaseModel):
     name: str
     raw: float
-    weight: float
-    weighted: float  # raw * weight
+    # Weights are query-adaptive: base_weight is the static env-driven value,
+    # applied_weight is what the resolver produced for this specific query.
+    # `weighted` uses applied_weight — that's the contribution to the final score.
+    base_weight: float
+    applied_weight: float
+    weighted: float  # raw * applied_weight
     note: str | None = None
 
 

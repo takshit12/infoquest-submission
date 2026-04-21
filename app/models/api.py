@@ -110,31 +110,6 @@ class ChatResponse(BaseModel):
     debug: DebugPayload | None = None  # populated when ?debug=true
 
 # ============================================================
-#                        Admin: Signal Weights (New)
-# ============================================================
-
-class SignalWeightsResponse(BaseModel):
-    industry: float = Field(ge=0.0, le=1.0)
-    function: float = Field(ge=0.0, le=1.0)
-    seniority: float = Field(ge=0.0, le=1.0)
-    skill_category: float = Field(ge=0.0, le=1.0)   
-    recency: float = Field(ge=0.0, le=1.0)
-    dense: float = Field(ge=0.0, le=1.0)
-    bm25: float = Field(ge=0.0, le=1.0)
-    trajectory: float = Field(ge=0.0, le=1.0)
-
-class SignalWeightsUpdateRequest(BaseModel):
-    """Request to update the signal weights."""
-    industry: float = Field(ge=0.0, le=1.0) 
-    function: float = Field(ge=0.0, le=1.0)
-    seniority: float = Field(ge=0.0, le=1.0)
-    skill_category: float = Field(ge=0.0, le=1.0)
-    recency: float = Field(ge=0.0, le=1.0)
-    dense: float = Field(ge=0.0, le=1.0)
-    bm25: float = Field(ge=0.0, le=1.0)
-    trajectory: float = Field(ge=0.0, le=1.0)
-
-# ============================================================
 #                        /experts
 # ============================================================
 

@@ -1,14 +1,12 @@
 """Dependency injection — lazy singletons for the app's ports."""
 from __future__ import annotations
 
-import time
-import threading
 from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
 
-from app.core.config import Settings, SignalWeights, get_settings
+from app.core.config import Settings, get_settings
 from app.ports.embedder import Embedder
 from app.ports.llm import LLMClient
 from app.ports.reranker import Reranker
@@ -75,58 +73,18 @@ def get_session_store() -> SessionStore:
     return SQLiteSessionStore(db_path=s.sessions_db)
 
 
-# ============================================================
-#           DYNAMIC SIGNAL WEIGHTS (NEW)
-# ============================================================
-
-_weights_cache: dict[str, object] = {"weights": None, "timestamp": 0.0}
-_weights_cache_lock = threading.Lock()
-
-
-def get_current_weights() -> SignalWeights:
-    """Fetch signal weights from database (with in-memory cache)."""
-    settings = get_settings()
-    
-    if not settings.enable_dynamic_weights:
-        return SignalWeights()
-    
-    with _weights_cache_lock:
-        now = time.time()
-        cached_weights = _weights_cache.get("weights")
-        cached_time = _weights_cache.get("timestamp", 0.0)
-        ttl = settings.signal_weights_cache_ttl
-        
-        if cached_weights and (now - cached_time) < ttl:
-            return cached_weights
-        
-        try:
-            from app.db import fetch_signal_weights
-            raw = fetch_signal_weights()
-            weights = SignalWeights.model_validate(raw)
-            _weights_cache["weights"] = weights
-            _weights_cache["timestamp"] = now
-            return weights
-        except Exception:
-            if cached_weights:
-                return cached_weights
-            return SignalWeights()
-
-
-def invalidate_weights_cache() -> None:
-    """Clear the weights cache."""
-    with _weights_cache_lock:
-        _weights_cache["weights"] = None
-        _weights_cache["timestamp"] = 0.0
-
-
+@lru_cache(maxsize=1)
 def get_reranker() -> Reranker:
+    # Base weights are env-driven (WEIGHT_* vars → SignalWeights); per-query
+    # modulation happens inside rerank() via resolve_query_weights(). So the
+    # reranker only holds constants, making lru_cache safe — unlike the prior
+    # iteration that fetched mutable weights from a DB at construction.
     from app.services.reranker import WeightedSignalReranker
     from app.services.signals import SIGNALS
 
     s = get_settings()
-    weights = get_current_weights().as_dict()
     return WeightedSignalReranker(
-        weights=weights,
+        weights=s.weights.as_dict(),
         signals=SIGNALS,
         maxp_bonus=s.maxp_multi_role_bonus,
         maxp_cap=s.maxp_multi_role_cap,
@@ -139,10 +97,3 @@ SparseRetrieverDep = Annotated[SparseRetriever, Depends(get_sparse_retriever)]
 LLMDep = Annotated[LLMClient, Depends(get_llm)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 RerankerDep = Annotated[Reranker, Depends(get_reranker)]
-
-
-def get_weights() -> SignalWeights:
-    return get_current_weights()
-
-
-WeightsDep = Annotated[SignalWeights, Depends(get_weights)]

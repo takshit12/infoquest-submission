@@ -104,10 +104,6 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = Field(default=60, alias="RATE_LIMIT_PER_MIN")
     max_body_size_bytes: int = Field(default=1_048_576, alias="MAX_BODY_SIZE_BYTES")
 
-    # ---- DYNAMIC WEIGHTS SETTINGS (NEW) ----
-    enable_dynamic_weights: bool = Field(default=False, alias="ENABLE_DYNAMIC_WEIGHTS")
-    signal_weights_cache_ttl: int = Field(default=300, alias="SIGNAL_WEIGHTS_CACHE_TTL")
-
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv_origins(cls, value):

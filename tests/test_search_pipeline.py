@@ -356,3 +356,95 @@ def test_refinement_filters_to_saudi_arabia_brief_phrase(
             assert entry.expert.country == "SA", (
                 f"got non-SA country {entry.expert.country!r} after Saudi-only refinement"
             )
+
+
+def test_weights_adapt_to_query_intent(
+    fake_embedder, fake_vector_store, fake_sparse, fake_sessions, reranker
+):
+    """Same candidate set, two queries with different intent structure.
+
+    Query A populates industry + function → industry_match weight is boosted
+    in the debug payload. Query B leaves both empty → industry_match weight is
+    damped. base_weight is identical across both; applied_weight differs.
+    """
+    _seed(fake_vector_store, fake_sparse)
+    from tests.conftest import FakeLLM
+
+    settings = Settings()
+    req_args = dict(top_k=3, include_why_not=False)
+
+    # Query A: rich intent — industry + function + seniority populated
+    llm_a = FakeLLM(
+        canned_json={
+            "rewritten_search": "regulatory pharma vp",
+            "keywords": ["regulatory", "pharma"],
+            "geographies": [],
+            "require_current": None,
+            "min_yoe": None,
+            "exclude_candidate_ids": [],
+            "function": "regulatory affairs",
+            "industries": ["Pharmaceuticals"],
+            "seniority_band": "vp",
+            "skill_categories": ["Regulatory"],
+        },
+        canned_text="exp",
+    )
+    resp_a = search_pipeline.run_chat(
+        req=ChatRequest(
+            query="VP of regulatory affairs in pharmaceuticals", **req_args
+        ),
+        debug=True,
+        embedder=fake_embedder,
+        vector_store=fake_vector_store,
+        sparse=fake_sparse,
+        llm=llm_a,
+        reranker=reranker,
+        sessions=fake_sessions,
+        settings=settings,
+    )
+
+    # Query B: vague intent — no structured fields populated
+    llm_b = FakeLLM(
+        canned_json={
+            "rewritten_search": "someone useful",
+            "keywords": [],
+            "geographies": [],
+            "require_current": None,
+            "min_yoe": None,
+            "exclude_candidate_ids": [],
+            "function": None,
+            "industries": [],
+            "seniority_band": None,
+            "skill_categories": [],
+        },
+        canned_text="exp",
+    )
+    resp_b = search_pipeline.run_chat(
+        req=ChatRequest(query="someone useful", **req_args),
+        debug=True,
+        embedder=fake_embedder,
+        vector_store=fake_vector_store,
+        sparse=fake_sparse,
+        llm=llm_b,
+        reranker=reranker,
+        sessions=fake_sessions,
+        settings=settings,
+    )
+
+    def sig_map(resp, name: str) -> dict[str, float]:
+        sigs = resp.debug.ranking_breakdown[0].signals
+        for s in sigs:
+            if s.name == name:
+                return {"base": s.base_weight, "applied": s.applied_weight}
+        raise AssertionError(f"signal {name} not in breakdown")
+
+    ind_a = sig_map(resp_a, "industry_match")
+    ind_b = sig_map(resp_b, "industry_match")
+
+    # Base is env-driven — identical across queries.
+    assert ind_a["base"] == ind_b["base"]
+    # Applied industry weight: boosted for A (industries populated),
+    # damped for B (industries empty).
+    assert ind_a["applied"] > ind_a["base"]
+    assert ind_b["applied"] < ind_b["base"]
+    assert ind_a["applied"] > ind_b["applied"]

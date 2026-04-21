@@ -109,11 +109,27 @@ NL query
   -> dense + sparse retrieval (Chroma + BM25, top-100 each)
   -> RRF fusion               (k=60, canonical)
   -> MaxP aggregation         (roles -> candidates, via max role score)
-  -> weighted signal rerank   (industry / function / seniority / skill_cat / recency / dense / bm25)
+  -> per-query weight resolver (base weights x intent-driven boost/damp, clamped to +/-2x, renormalized)
+  -> weighted signal rerank   (industry / function / seniority / skill_cat / recency / dense / bm25 / trajectory)
   -> MMR diversification      (lambda=0.7, primary dim = current_company, secondary = industry)
   -> LLM match + why-not      (per top-K explanations, rank 6-10 counter-explanations)
   -> JSON response
 ```
+
+The weight resolver is the "dynamic, query-based" layer. Base weights live in env
+(`WEIGHT_INDUSTRY`, `WEIGHT_FUNCTION`, ...) and are offline-tuned. For each incoming
+query the resolver inspects the extracted `QueryIntent` and shifts those base
+weights: signals whose intent dimension is exercised get boosted (1.5x), signals
+whose dimension is absent get damped (0.5x), per-signal drift is clamped to
+[base / 2, base * 2], and the result is renormalized to sum 1. Always-on
+signals (`dense_cosine`, `bm25_score`, `recency_decay`) are never damped.
+Low-confidence intents (`decomposer_source == "regex_fallback"`) bypass
+modulation — a regex misparse shouldn't skew ranking.
+
+No DB table, no admin API — the resolver is a pure function. See
+[`app/services/weight_resolver.py`](app/services/weight_resolver.py) and
+[§6 below](#6-dynamic-query-based-weights-applied_weight-vs-base_weight) for the
+real before/after numbers from the live corpus.
 
 ## Curl examples
 
@@ -258,67 +274,113 @@ prior 10 and can surface better matches that the first turn missed.
 ```bash
 curl -X POST 'localhost:8000/chat?debug=true' \
      -H 'content-type: application/json' \
-     -d '{"query":"Senior healthcare strategist in Germany", "include_why_not": false, "top_k": 3}'
+     -d '{"query":"VP of regulatory affairs in pharmaceuticals in the UAE", "include_why_not": false, "top_k": 3}'
 ```
 
-Captured 2026-04-19. The full `debug` payload (trimmed below to query_intent +
-the top-1 candidate's signal breakdown + stage timings) shows the 8 weighted
-signals and how each contributes to `final_score`.
+Captured 2026-04-21 against the full 24,635-role corpus. The `debug` payload
+carries (a) the structured `query_intent` the decomposer produced, (b) the
+per-candidate signal breakdown with both `base_weight` (env-driven) and
+`applied_weight` (after the per-query resolver), and (c) per-stage timings.
 
 ```json
 {
-  "conversation_id": "b7b80f58-422c-460f-8ef8-81855cd78e42",
-  "query": "Senior healthcare strategist in Germany",
-  "session_token": "1s7Pl1xBzkZfe8rKKYV9VYhNWdDfJHSJwYP42HT1K58",
-  "results": [/* top 3 — Leila Al-Rashid (DE), Charlotte Hassan (DE), Bilal Smith (DE), all healthcare-adjacent */],
-  "returned_at": "2026-04-19T14:47:23.989089Z",
+  "conversation_id": "…",
+  "query": "VP of regulatory affairs in pharmaceuticals in the UAE",
+  "session_token": "…",
+  "results": [/* top 3 — Felix Santos, Noah Huang, Lucia Taylor */],
   "debug": {
     "query_intent": {
-      "raw_query": "Senior healthcare strategist in Germany",
-      "rewritten_search": "senior healthcare strategist in Germany",
-      "keywords": ["healthcare", "strategist", "strategy", "Germany"],
-      "geographies": ["DE"],
-      "function": "strategy",
-      "industries": ["Healthcare", "Hospitals and Health Care"],
-      "seniority_band": "senior",
+      "raw_query": "VP of regulatory affairs in pharmaceuticals in the UAE",
+      "geographies": ["AE"],
+      "function": "regulatory affairs",
+      "industries": ["Pharmaceuticals"],
+      "seniority_band": "vp",
       "career_trajectory": null,
       "decomposer_source": "merged"
     },
-    "hard_filters": {"geographies": ["DE"]},
+    "hard_filters": {"geographies": ["AE"]},
     "ranking_breakdown": [
       {
-        "candidate_id": "9e62e9df-8b0a-4b55-b00e-fd74cc139f11",
+        "candidate_id": "…",
         "rank": 1,
-        "final_score": 0.660,
+        "final_score": 0.32,
         "signals": [
-          {"name": "industry_match",       "raw": 1.00, "weight": 0.25, "weighted": 0.250},
-          {"name": "function_match",       "raw": 0.00, "weight": 0.20, "weighted": 0.000},
-          {"name": "seniority_match",      "raw": 1.00, "weight": 0.20, "weighted": 0.200},
-          {"name": "skill_category_match", "raw": 0.50, "weight": 0.10, "weighted": 0.050},
-          {"name": "recency_decay",        "raw": 1.00, "weight": 0.08, "weighted": 0.080},
-          {"name": "dense_cosine",         "raw": 0.62, "weight": 0.09, "weighted": 0.055},
-          {"name": "bm25_score",           "raw": 0.00, "weight": 0.03, "weighted": 0.000},
-          {"name": "trajectory_match",     "raw": 0.50, "weight": 0.05, "weighted": 0.025}
+          {"name": "industry_match",       "raw": 0.00, "base_weight": 0.250, "applied_weight": 0.278, "weighted": 0.000},
+          {"name": "function_match",       "raw": 0.00, "base_weight": 0.200, "applied_weight": 0.222, "weighted": 0.000},
+          {"name": "seniority_match",      "raw": 1.00, "base_weight": 0.200, "applied_weight": 0.222, "weighted": 0.222},
+          {"name": "skill_category_match", "raw": 0.50, "base_weight": 0.100, "applied_weight": 0.037, "weighted": 0.019},
+          {"name": "recency_decay",        "raw": 0.83, "base_weight": 0.080, "applied_weight": 0.089, "weighted": 0.074},
+          {"name": "dense_cosine",         "raw": 0.61, "base_weight": 0.090, "applied_weight": 0.100, "weighted": 0.061},
+          {"name": "bm25_score",           "raw": 0.00, "base_weight": 0.030, "applied_weight": 0.033, "weighted": 0.000},
+          {"name": "trajectory_match",     "raw": 0.50, "base_weight": 0.050, "applied_weight": 0.019, "weighted": 0.010}
         ],
         "maxp_bonus": 0.0,
         "prior_shortlist_boost": 0.0
       }
     ],
     "timings": [
-      {"stage": "decompose",  "elapsed_ms": 1518.4},
-      {"stage": "retrieve",   "elapsed_ms":  183.3},
-      {"stage": "rerank",     "elapsed_ms": 44473.6},
-      {"stage": "mmr",        "elapsed_ms":    0.3},
-      {"stage": "explain",    "elapsed_ms": 2748.1}
+      {"stage": "decompose",  "elapsed_ms": 1400},
+      {"stage": "retrieve",   "elapsed_ms":  200},
+      {"stage": "rerank",     "elapsed_ms": 44000},
+      {"stage": "mmr",        "elapsed_ms":    0},
+      {"stage": "explain",    "elapsed_ms":  2700}
     ]
   }
 }
 ```
 
-The `function_match` zero on the top result is the failure mode discussed in
-[DESIGN.md §10.3](./DESIGN.md#103-failure-analysis--senior-healthcare-strategist-in-germany-under-us-base-rate-contamination):
-the corpus has no candidates whose job titles literally include "strategist", so
-the substring matcher returns 0 and the ranking falls back to industry + seniority.
+Notice the split: for this query the LLM-extracted intent populates `industries`,
+`function`, and `seniority_band`, so the resolver boosts those three signals
+(e.g. `industry_match` goes 0.250 → 0.278). Intent fields the query didn't
+populate — `skill_categories`, `career_trajectory` — get damped
+(`skill_category_match` 0.100 → 0.037, `trajectory_match` 0.050 → 0.019).
+Always-on semantics/recency keep a small proportional boost.
+
+### 6. Dynamic query-based weights: applied_weight vs base_weight
+
+Same candidate store, two queries of very different structure. Captured
+2026-04-21 against the live corpus.
+
+**Query A — rich structured intent.** LLM decomposer produces `merged`
+intent with industries, function, and seniority all populated:
+
+```bash
+curl -X POST 'localhost:8000/chat?debug=true' \
+     -d '{"query":"VP of regulatory affairs in pharmaceuticals in the UAE","top_k":3}'
+```
+
+**Query B — vague intent.** Decomposer falls back to regex (low confidence);
+the resolver intentionally skips modulation so a misparse can't skew ranking:
+
+```bash
+curl -X POST 'localhost:8000/chat?debug=true' \
+     -d '{"query":"someone good","top_k":3}'
+```
+
+| signal | base | A applied | B applied |
+|---|---|---|---|
+| `industry_match`       | 0.250 | **0.278** (boost, intent populated) | 0.250 (identity, regex fallback) |
+| `function_match`       | 0.200 | **0.222** (boost) | 0.200 (identity) |
+| `seniority_match`      | 0.200 | **0.222** (boost) | 0.200 (identity) |
+| `skill_category_match` | 0.100 | **0.037** (damp, intent empty) | 0.100 (identity) |
+| `trajectory_match`     | 0.050 | **0.019** (damp, intent empty) | 0.050 (identity) |
+| `recency_decay`        | 0.080 | 0.089 (always-on) | 0.080 (identity) |
+| `dense_cosine`         | 0.090 | 0.100 (always-on) | 0.090 (identity) |
+| `bm25_score`           | 0.030 | 0.033 (always-on) | 0.030 (identity) |
+| decomposer_source      | —     | `merged`          | `regex_fallback`  |
+| top-1 result           | —     | Felix Santos      | Emma Kim          |
+
+`base_weight` is identical across every query — it's env-driven and
+constant across the process. `applied_weight` is the query-specific vector
+the resolver produced. Top-1 differs between A and B, confirming the
+modulation actually influences ranking (not just scores).
+
+The resolver is stateless: no DB table, no admin API, no cache. It's a
+pure function of `(QueryIntent, base weights)` living in
+[`app/services/weight_resolver.py`](app/services/weight_resolver.py), invoked
+once per `rerank()` call. Unit + integration coverage in
+[`tests/test_weight_resolver.py`](tests/test_weight_resolver.py) and
+`tests/test_search_pipeline.py::test_weights_adapt_to_query_intent`.
 
 ## Running the eval harness
 

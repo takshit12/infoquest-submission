@@ -23,6 +23,7 @@ from app.models.domain import (
     ScoredCandidate,
     ScoredRole,
 )
+from app.services.weight_resolver import resolve_query_weights
 
 _log = get_logger("infoquest.reranker")
 
@@ -89,11 +90,17 @@ class WeightedSignalReranker:
         # 1. Normalize sparse scores batch-wide.
         self._normalize_sparse_in_place(roles)
 
-        # 2. Compute per-role weighted final_score from signals.
+        # 2. Derive per-query weights from the intent once. self.weights is the
+        # env-driven base; `weights` is what we actually apply to every role in
+        # this batch. Pure function of (intent, base), so idempotent — callers
+        # (e.g. the debug-payload builder) can re-derive without side effects.
+        weights = resolve_query_weights(intent, self.weights)
+
+        # 3. Compute per-role weighted final_score from signals.
         for role in roles:
             total = 0.0
             sig_scores: dict[str, float] = {}
-            for sig_name, weight in self.weights.items():
+            for sig_name, weight in weights.items():
                 fn = self.signals.get(sig_name)
                 if fn is None:
                     continue
@@ -113,7 +120,7 @@ class WeightedSignalReranker:
             role.signal_scores = sig_scores
             role.final_score = max(0.0, min(1.0, total))
 
-        # 3. Group roles by candidate_id.
+        # 4. Group roles by candidate_id.
         by_cand: dict[str, list[ScoredRole]] = defaultdict(list)
         for role in roles:
             by_cand[role.role.candidate_id].append(role)
@@ -167,6 +174,6 @@ class WeightedSignalReranker:
                 )
             )
 
-        # 4. Sort candidates desc by relevance_score.
+        # 5. Sort candidates desc by relevance_score.
         candidates.sort(key=lambda c: c.relevance_score, reverse=True)
         return candidates
